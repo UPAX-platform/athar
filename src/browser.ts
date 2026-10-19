@@ -4,6 +4,10 @@ import type { AnalyticsClient, ClientOptions, Consent, EventContext, Identity, P
 export interface BrowserOptions extends ClientOptions {
   consent?: Consent;
   autoPageviews?: boolean;
+  /** Disable History API instrumentation when a framework owns navigation events. */
+  historyTracking?: boolean;
+  /** Router adapters wait for completed navigation before the first pageview. */
+  initialPageview?: boolean;
   autoEvents?: boolean;
   respectDoNotTrack?: boolean;
   domains?: string[];
@@ -14,6 +18,8 @@ export interface BrowserOptions extends ClientOptions {
 }
 
 export interface BrowserClient extends Omit<AnalyticsClient, 'identify'> {
+  /** Records a pageview only when the sanitized URL changes. Used by router adapters. */
+  pageIfChanged(context?: EventContext, props?: Properties): boolean;
   identify(identity: Identity): Promise<void>;
   setConsent(state: Consent): void;
   getConsent(): Consent;
@@ -144,16 +150,19 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     if (!allowed()) return false;
     try { return core.track(name, props, context(override)); } catch (error) { internal.report(error); return false; }
   }
-  function autoPage(): void {
-    if (!w || !allowed()) return;
-    const current = sanitize(w.location.href);
-    if (current === lastPage) return;
-    const referrer = lastPage ?? w.document.referrer;
-    if (track('page_view', { title: w.document.title }, { referrer })) {
-      previousPage = referrer;
+  function pageIfChanged(override: EventContext = {}, props?: Properties): boolean {
+    if (!w || !allowed()) return false;
+    try {
+      const current = sanitize(override.url ?? w.location.href);
+      if (current === lastPage) return false;
+      const referrer = override.referrer ?? lastPage ?? w.document.referrer;
+      if (!track('page_view', props ?? { title: w.document.title }, { ...override, referrer })) return false;
+      previousPage = sanitize(referrer);
       lastPage = current;
-    }
+      return true;
+    } catch (error) { internal.report(error); return false; }
   }
+  function autoPage(): void { pageIfChanged(); }
   function lifecycleFlush(): void {
     if (!allowed()) return;
     if (w?.navigator.sendBeacon) internal.beacon(w.navigator.sendBeacon.bind(w.navigator));
@@ -168,6 +177,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
   }
   const client: BrowserClient = {
     track,
+    pageIfChanged,
     page: (override, props) => track('page_view', props ?? { title: w?.document.title ?? '' }, override),
     async identify(identity) {
       if (!allowed() || consent !== 'granted') return;
@@ -197,7 +207,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       if (!w || running || terminated) return;
       running = true;
       loadConsent();
-      const removeHistory = options.autoPageviews === false ? () => {} : subscribeHistory(w, autoPage);
+      const removeHistory = options.autoPageviews === false || options.historyTracking === false ? () => {} : subscribeHistory(w, autoPage);
       const visibility = () => { if (w.document.visibilityState === 'hidden') lifecycleFlush(); };
       const online = () => { if (allowed()) void core.flush().catch(internal.report); };
       const click = (event: MouseEvent) => {
@@ -232,7 +242,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
         w.document.removeEventListener('visibilitychange', visibility);
         w.document.removeEventListener('click', click);
       };
-      if (options.autoPageviews !== false) autoPage();
+      if (options.autoPageviews !== false && options.initialPageview !== false) autoPage();
     },
     stop() { cleanup?.(); cleanup = undefined; running = false; },
   };

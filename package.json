@@ -1,7 +1,7 @@
 {
   "name": "@upax/athar",
   "version": "0.1.0",
-  "description": "Privacy-conscious analytics SDK for browsers, Node.js, and React",
+  "description": "Privacy-conscious analytics SDK for browsers, Node.js, and popular frontend frameworks",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -10,41 +10,174 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./browser": {
-      "import": { "types": "./dist/browser.d.ts", "default": "./dist/browser.js" },
-      "require": { "types": "./dist/browser.d.cts", "default": "./dist/browser.cjs" }
+      "import": {
+        "types": "./dist/browser.d.ts",
+        "default": "./dist/browser.js"
+      },
+      "require": {
+        "types": "./dist/browser.d.cts",
+        "default": "./dist/browser.cjs"
+      }
     },
     "./react": {
-      "import": { "types": "./dist/react.d.ts", "default": "./dist/react.js" },
-      "require": { "types": "./dist/react.d.cts", "default": "./dist/react.cjs" }
+      "import": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./vue": {
+      "import": {
+        "types": "./dist/vue.d.ts",
+        "default": "./dist/vue.js"
+      },
+      "require": {
+        "types": "./dist/vue.d.cts",
+        "default": "./dist/vue.cjs"
+      }
+    },
+    "./angular": {
+      "import": {
+        "types": "./dist/angular.d.ts",
+        "default": "./dist/angular.js"
+      },
+      "require": {
+        "types": "./dist/angular.d.cts",
+        "default": "./dist/angular.cjs"
+      }
+    },
+    "./svelte": {
+      "import": {
+        "types": "./dist/svelte.d.ts",
+        "default": "./dist/svelte.js"
+      },
+      "require": {
+        "types": "./dist/svelte.d.cts",
+        "default": "./dist/svelte.cjs"
+      }
+    },
+    "./sveltekit": {
+      "import": {
+        "types": "./dist/sveltekit.d.ts",
+        "default": "./dist/sveltekit.js"
+      },
+      "require": {
+        "types": "./dist/sveltekit.d.cts",
+        "default": "./dist/sveltekit.cjs"
+      }
+    },
+    "./next": {
+      "import": {
+        "types": "./dist/next.d.ts",
+        "default": "./dist/next.js"
+      },
+      "require": {
+        "types": "./dist/next.d.cts",
+        "default": "./dist/next.cjs"
+      }
+    },
+    "./astro": {
+      "import": {
+        "types": "./dist/astro.d.ts",
+        "default": "./dist/astro.js"
+      },
+      "require": {
+        "types": "./dist/astro.d.cts",
+        "default": "./dist/astro.cjs"
+      }
+    }
   },
-  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
-  "engines": { "node": ">=22" },
-  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "npm run typecheck && npm test && npm run build && node scripts/check-package.mjs",
+    "check": "npm run typecheck && npm test && npm run build && node scripts/check-package.mjs && node scripts/check-consumer.mjs",
     "prepack": "npm run build",
-    "prepublishOnly": "npm run check"
+    "prepublishOnly": "npm run check",
+    "test:sveltekit": "node scripts/check-sveltekit.mjs"
   },
-  "peerDependencies": { "react": ">=18 <20" },
-  "peerDependenciesMeta": { "react": { "optional": true } },
+  "peerDependencies": {
+    "@angular/common": ">=19 <23",
+    "@angular/core": ">=19 <23",
+    "@angular/router": ">=19 <23",
+    "@sveltejs/kit": ">=2 <4",
+    "next": ">=14 <17",
+    "react": ">=18 <20",
+    "svelte": ">=4 <6",
+    "vue": ">=3.5 <4"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "vue": {
+      "optional": true
+    },
+    "@angular/core": {
+      "optional": true
+    },
+    "@angular/common": {
+      "optional": true
+    },
+    "@angular/router": {
+      "optional": true
+    },
+    "svelte": {
+      "optional": true
+    },
+    "@sveltejs/kit": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@angular/common": "^22.2.3",
+    "@angular/compiler": "^22.2.3",
+    "@angular/core": "^22.2.3",
+    "@angular/platform-browser": "^22.2.3",
+    "@angular/router": "^22.2.3",
+    "@sveltejs/kit": "^3.1.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "jsdom": "^26.0.0",
+    "next": "^16.4.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "rxjs": "^7.8.2",
+    "svelte": "^5.57.2",
     "tsup": "^8.5.0",
-    "typescript": "~5.9.3",
-    "vitest": "^5.0.5"
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5",
+    "vue": "^3.5.44"
   }
 }

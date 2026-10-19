@@ -1,7 +1,8 @@
 # Athar JavaScript SDK
 
-Typed analytics for browsers, Node.js, and React. Zero runtime dependencies, ESM
-and CommonJS exports, and optional React bindings. Node.js 22+ and modern browsers
+Typed analytics for browsers, Node.js, React, Vue, Angular, Svelte, Next.js, and
+Astro. Zero runtime dependencies, ESM and CommonJS exports, and optional framework
+bindings. Node.js 22+ and modern browsers
 with Fetch, Web Crypto, and ES2022 support are required.
 
 ```sh
@@ -82,6 +83,133 @@ Imports are safe during server rendering; no DOM is accessed at module import
 and no listeners are installed during construction. Browser methods are inactive
 on the server. For server events, use the core client below.
 
+## Framework integrations
+
+Each integration has its own import path. Install only the framework your app
+uses; framework peers are optional for the core/browser client. Use one integration
+per application tree. Router integrations disable History API instrumentation and
+record completed navigations with URL deduplication. `autoPageviews: false`
+disables integration-owned pageviews. Manual `page()` always records a view;
+`pageIfChanged()` records only a changed, sanitized URL.
+
+| Import | Integration | Framework peer |
+| --- | --- | --- |
+| `@upax/athar/vue` | Plugin, composable, optional Vue Router hooks | Vue 3.5+ |
+| `@upax/athar/angular` | Application provider, injection helper, Router events | Angular 19–22 core/common/router |
+| `@upax/athar/svelte` | Context and mount/unmount lifecycle | Svelte 4–5 |
+| `@upax/athar/sveltekit` | Svelte context and `afterNavigate` | SvelteKit 2–3 and its Svelte peer |
+| `@upax/athar/next` | App Router provider and shared React context | Next.js 14–16 and its React peer |
+| `@upax/athar/astro` | Client installation and page-load listener | No additional SDK peer |
+
+Tests currently use Vue 3.5, Angular 22, Svelte 5, SvelteKit 3, and Next.js 16.
+Each framework's own runtime and TypeScript requirements also apply. Every entry
+includes generated `.d.ts`/`.d.cts` declarations: no separate SDK types package,
+global declaration, or TypeScript adapter setup file is needed.
+
+### Vue
+
+```ts
+import { createApp } from 'vue';
+import { createAtharPlugin } from '@upax/athar/vue';
+import App from './App.vue';
+import router from './router';
+
+createApp(App).use(router).use(createAtharPlugin({
+  site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com',
+  router, // Optional: omit for plain Vue with generic SPA tracking.
+})).mount('#app');
+```
+
+In component setup, import `useAthar` from `@upax/athar/vue`, then call
+`useAthar().track('signup')`. Each app receives its own client. Router tracking
+waits for readiness, ignores failed navigations, and cleans up on app unmount.
+
+### Angular
+
+```ts
+import { bootstrapApplication } from '@angular/platform-browser';
+import { provideRouter } from '@angular/router';
+import { provideAthar } from '@upax/athar/angular';
+import { App } from './app';
+import { routes } from './routes';
+
+bootstrapApplication(App, { providers: [
+  provideRouter(routes),
+  provideAthar({ site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com' }),
+] });
+```
+
+Import `injectAthar` from `@upax/athar/angular` and call it in a component's
+injection context; `inject(ATHAR)` is also available. The provider waits for
+`NavigationEnd`, or records the initial view when no Router is registered.
+Server initialization installs no listeners. Injector destruction unsubscribes
+and flushes. This entry requires matching Angular core, common, and router packages.
+
+### Svelte and SvelteKit
+
+Call the provider during the root component's instance script initialization,
+once per component tree. Avoid a shared server module script. With SvelteKit,
+place this in `src/routes/+layout.svelte` (Svelte 5 syntax):
+
+```svelte
+<script lang="ts">
+  // Plain Svelte: import from '@upax/athar/svelte' instead.
+  import { provideAthar } from '@upax/athar/sveltekit';
+  let { children } = $props();
+  provideAthar({ site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com' });
+</script>
+
+{@render children()}
+```
+
+Children call `useAthar()` from the same entry point. The plain Svelte and
+SvelteKit entries share a context key, so children may also use `/svelte`.
+Svelte 4 applications use normal `<slot />` layout syntax. Plain Svelte uses
+mount/unmount and generic SPA tracking; SvelteKit observes initial and completed
+navigations. The `/sveltekit` entry requires SvelteKit's bundler to resolve
+`$app/navigation`; use `/svelte` in applications without SvelteKit.
+
+### Next.js App Router
+
+Create a client component and wrap the root layout's children with it:
+
+```tsx
+'use client';
+import { useState, type ReactNode } from 'react';
+import { AtharNextProvider, createNextClient } from '@upax/athar/next';
+
+export function Analytics({ children }: { children: ReactNode }) {
+  const [client] = useState(() => createNextClient({
+    site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com',
+  }));
+  return <AtharNextProvider client={client}>{children}</AtharNextProvider>;
+}
+```
+
+`useAthar()` from `/next` or `/react` accesses the same provider. The navigation
+observer has its own Suspense boundary for static rendering. It waits for router
+state and deduplicates Strict Mode and sanitized query-only changes. For the Pages
+Router, use the regular `/react` provider with generic browser History tracking.
+
+### Astro
+
+Place this processed client script once in a shared layout, including when using
+Astro's ClientRouter. Avoid installing it separately in each island:
+
+```astro
+<script>
+  import { installAthar } from '@upax/athar/astro';
+  const analytics = installAthar({
+    site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com',
+  });
+  if (import.meta.hot) import.meta.hot.dispose(() => analytics.dispose());
+</script>
+```
+
+It records the initial page and listens for `astro:page-load` after transitions.
+Use `analytics.client` for events and consent. `dispose()` removes listeners and
+flushes pending events; also use `client.shutdown()` when permanently retiring it.
+
 ## Node.js and other server runtimes
 
 ```ts
@@ -159,6 +287,8 @@ Saved browser IDs are scoped to the site token. Granted sessions expire after
 Additional browser options: `consent`, `autoPageviews` (true), `autoEvents`
 (true), `respectDoNotTrack` (true), `domains` (exact hostname allowlist),
 `includeQuery` (false), `includeHash` (false), `sessionTimeout` (1800000 ms).
+`historyTracking` and `initialPageview` (both true) allow router adapters to own
+navigation timing while preserving consent handling and other browser listeners.
 
 Core methods: `track(name, props?, context?)`, `page(context?, props?)`,
 `identify(identity, context)`, `flush()`, `shutdown()`. Context accepts `url`,
@@ -207,6 +337,8 @@ npm pack --dry-run
 CI checks Node.js 22 and 24. The package allowlist includes only compiled output,
 the manifest, README, changelog, and license. Builds contain no source maps or
 deployment defaults. Tests use fake transports and an ephemeral local HTTP server.
+`npm run test:sveltekit` also builds a real SvelteKit client/server fixture against
+the compiled SDK, validating its virtual navigation import. CI runs it on Node.js 24.
 
 Before the first release, confirm the package scope/name and MIT license, add
 the public source URL as `repository` in `package.json`, and configure your npm
