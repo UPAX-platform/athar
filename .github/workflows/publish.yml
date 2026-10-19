@@ -1,0 +1,39 @@
+name: Publish
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Existing version tag to publish (vX.Y.Z)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Verify release
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          if (process.env.RELEASE_REF !== `v${pkg.version}`) throw new Error('Tag must match package version');
+          if (!pkg.repository) throw new Error('Set the public repository metadata before publishing');
+          NODE
+      - run: npm ci
+      - run: npm run check
+      - run: npm publish --ignore-scripts --access public --provenance
