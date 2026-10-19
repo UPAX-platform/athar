@@ -1,4 +1,4 @@
-// Generated from platform attribution-params.json; run node scripts/sync-attribution.mjs.
+// Generated from the public attribution catalogue; run node scripts/sync-attribution.mjs.
 export const attributionParams = [
   {
     "param": "ScCid",

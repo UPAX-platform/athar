@@ -183,7 +183,7 @@ describe('browser tracking', () => {
   });
 });
 
-it('captures every platform descriptor while keeping identifiers and unrelated query data out', async () => {
+it('captures every supported descriptor while keeping identifiers and unrelated query data out', async () => {
   const { attributionParams } = await import('../src/attribution-params');
   const params = new URLSearchParams();
   const expected: Record<string, string> = {};
