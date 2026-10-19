@@ -12,6 +12,8 @@ export interface AnalyticsEvent {
   sid?: string;
   vid?: string;
   utm?: Record<string, string>;
+  /** Allowlisted campaign descriptors, keyed by their URL parameter names. */
+  attribution?: Record<string, string>;
   props: Properties;
 }
 
@@ -22,6 +24,16 @@ export interface EventContext {
   visitorId?: string;
   timestamp?: number;
   utm?: Record<string, string>;
+  /** Allowlisted campaign descriptors, keyed by their URL parameter names. */
+  attribution?: Record<string, string>;
+}
+
+/** A controlled click-ID handoff requires explicit consent and both identity keys. */
+export interface AttributionContext {
+  consent: 'granted';
+  sessionId: string;
+  visitorId: string;
+  timestamp?: number;
 }
 
 export interface Identity {
@@ -52,6 +64,10 @@ export interface AnalyticsClient {
   page(context?: EventContext, props?: Properties): boolean;
   /** Resolves on HTTP acknowledgement; rejects on delivery failure. */
   identify(identity: Identity, context: EventContext): Promise<void>;
+  /** Queue a consented click-ID handoff; flush() waits for collector acknowledgement. */
+  captureAttribution(params: Record<string, string>, context: AttributionContext): boolean;
+  /** Revoke this visitor's pending click-ID handoffs. Rotate visitor ID before regranting. */
+  revokeAttribution(visitorId: string): boolean;
   flush(): Promise<void>;
   /** Stops accepting events and drains the existing queue. May be retried. */
   shutdown(): Promise<void>;

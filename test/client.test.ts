@@ -146,3 +146,64 @@ describe('client', () => {
     expect(fetcher.mock.calls[1]?.[1].body).not.toContain('someone@example.com');
   });
 });
+
+it('filters manual attribution and hook changes before serialization, preserving valid descriptors', async () => {
+  const fetcher = vi.fn().mockResolvedValue(ok());
+  const client = createClient(config({ fetch: fetcher, beforeSend: event => ({ ...event,
+    url: 'https://example.com/?gclid=private-click&keep=yes',
+    attribution: { ...event.attribution, fbclid: 'private-click' },
+  }) }));
+  expect(client.track('arrival', {}, { attribution: {
+    campaign_id: ' 123 ', placement: 'feed', keyword: 'é'.repeat(257),
+    ad_id: 'x'.repeat(129), unknown: 'private',
+  } })).toBe(true);
+  await client.shutdown();
+  const event = JSON.parse(fetcher.mock.calls[0]![1].body).events[0];
+  expect(event.attribution).toEqual({ campaign_id: '123', placement: 'feed' });
+  expect(event.url).toBe('https://example.com/?keep=yes');
+});
+
+it('retries click handoffs with a stable request ID, and flush waits for acknowledgement', async () => {
+  const fetcher = vi.fn().mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValue(ok());
+  const hook = vi.fn(event => event);
+  const client = createClient(config({ fetch: fetcher, beforeSend: hook }));
+  expect(client.captureAttribution({ gclid: 'secret-token', campaign_id: '123' },
+    { consent: 'granted', sessionId: 's1', visitorId: 'v1' })).toBe(true);
+  await client.flush();
+  expect(fetcher.mock.calls).toHaveLength(2);
+  expect(fetcher.mock.calls[0]![0]).toBe('https://collector.example/v1/attribution');
+  expect(fetcher.mock.calls[0]![1].body).toBe(fetcher.mock.calls[1]![1].body);
+  expect(hook).not.toHaveBeenCalled();
+  await client.shutdown();
+});
+
+it('supports every catalogue identifier and alias without collapsing different kinds', async () => {
+  const { attributionParams } = await import('../src/attribution-params');
+  const fetcher = vi.fn().mockResolvedValue(ok());
+  const client = createClient(config({ fetch: fetcher }));
+  for (const p of attributionParams) {
+    if (p.class !== 'identifier') continue;
+    for (const key of [p.param, ...('aliases' in p ? p.aliases : [])]) {
+      expect(client.captureAttribution({ [key]: 'token' }, { consent: 'granted', sessionId: key, visitorId: 'v1' })).toBe(true);
+    }
+  }
+  expect(client.captureAttribution({ gclid: 'token' }, { consent: 'granted', sessionId: 's1', visitorId: 'v\0id' })).toBe(false);
+  expect(client.captureAttribution({ gclid: 'same', fbclid: 'same' }, { consent: 'granted', sessionId: 's1', visitorId: 'v1' })).toBe(false);
+  await client.flush();
+  expect(fetcher.mock.calls).toHaveLength(14);
+  await client.shutdown();
+});
+
+it('lets a revocation bypass a failed capture and prevents token-bearing retries', async () => {
+  const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 503 }));
+  const client = createClient(config({ fetch: fetcher, maxRetries: 0 }));
+  client.captureAttribution({ gclid: 'secret-token' }, { consent: 'granted', sessionId: 's1', visitorId: 'v1' });
+  await expect(client.flush()).rejects.toThrow('Attribution delivery failed');
+  fetcher.mockResolvedValue(ok());
+  expect(client.revokeAttribution('v1')).toBe(true);
+  await client.flush();
+  expect(fetcher.mock.calls).toHaveLength(2);
+  expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toMatchObject({ consent: 'denied', vid: 'v1' });
+  expect(fetcher.mock.calls[1]![1].body).not.toContain('secret-token');
+  await client.shutdown();
+});

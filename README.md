@@ -260,9 +260,9 @@ aborts active requests; requests already received cannot be recalled.
 
 Do Not Track and Global Privacy Control suppress collection by default. Query
 strings, fragments, URL credentials, and referrer query strings are removed.
-The five standard UTM values are collected separately. Paths, page titles, UTM
+The five standard UTM values and allowlisted campaign descriptors are collected separately. Paths, page titles, UTM
 values, and custom properties can still contain personal data: use `beforeSend`
-to redact them. `includeQuery` and `includeHash` opt into full URL components.
+to redact them. `includeQuery` and `includeHash` opt into URL components; recognized click-ID query parameters are removed even with `includeQuery`.
 
 `reset()` clears queued events and stored IDs while preserving consent; use it
 on logout. `setEnabled(false)` discards queued events and pauses collection.
@@ -369,3 +369,81 @@ migration if needed. Denial now suppresses events and identity calls entirely.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+### Campaign attribution
+
+Browser and framework clients automatically send the platform's 19 campaign
+parameters in `event.attribution`, separately from the sanitized page URL:
+`ad_id`, `adgroupid`, `adid`, `adset_id`, `aid`, `campaign_id`, `campaign_name`,
+`campaignid`, `cid`, `creative`, `device`, `gad_campaignid`, `gad_source`,
+`keyword`, `matchtype`, `network`, `placement`, `site_source_name`, and `srsltid`.
+UTM capture continues unchanged. Router URL overrides are used for both UTM and
+attribution capture. No extra browser storage is created for attribution.
+
+Node.js clients can supply the same query-key map through event context:
+
+```ts
+client.track('page_view', {}, {
+  url: 'https://shop.example/products',
+  attribution: { campaign_id: '123', ad_id: '456', placement: 'feed' },
+});
+```
+
+Unknown keys, click identifiers, blank values, and oversized values are dropped
+from `attribution`, including after `beforeSend`. External IDs are limited to
+128 UTF-8 bytes; other descriptor values to 512. These are field drops, not
+truncations. Custom properties and UTM values still require application redaction.
+
+The updated Signals collector validates the same catalogue and keeps the first
+non-empty attribution block for each session. It forwards canonical descriptor
+fields on `session.summary` to marketing. Deploy the collector/core update before
+releasing the SDK: older collectors ignore the new `attribution` field.
+Click IDs use the separate consent-gated handoff described below.
+
+Maintainers can refresh the embedded SDK catalogue from the platform checkout:
+
+```sh
+node scripts/sync-attribution.mjs attribution-params.json
+node scripts/sync-attribution.mjs attribution-params.json --check
+```
+
+
+### Controlled click-ID delivery
+
+After explicit `granted` consent, browser/framework clients capture the first
+unambiguous click-ID arrival observed in each session. The click ID and descriptors
+from that same URL go to `POST /v1/attribution`, never `/v1/e`. Unknown/denied
+consent and DNT/GPC suppress capture. A grant reads the current URL; the SDK does
+not save pre-consent landing tokens for later capture.
+
+Pending handoffs stay in memory, with stable request IDs across retries. They are
+not passed to `beforeSend`, written to browser storage, or included in analytics
+beacons. `flush()` and `shutdown()` wait for acknowledgement. The browser client
+also exposes `captureAttribution(params?)` for an explicit current-session capture.
+
+Node.js callers must supply consent and both identity keys:
+
+```ts
+client.captureAttribution({ gclid: clickId, campaign_id: '123' }, {
+  consent: 'granted', sessionId: sessionId, visitorId: visitorId,
+});
+await client.flush();
+
+// On withdrawal, cancel pending capture and request server-side cleanup.
+client.revokeAttribution(visitorId);
+await client.flush();
+```
+
+Browser `setConsent('denied' | 'unknown')`, cross-tab withdrawal, and `reset()`
+cancel queued/in-flight captures and enqueue a token-free withdrawal for the old
+visitor. Withdrawal requests can run while tracking is disabled. Requests already
+received cannot be recalled; withdrawal removes staging and redacts click fields
+from retained summaries, but cell-side copies require the platform's erasure flow.
+Use a new visitor ID when consent is granted again (the browser client does this).
+
+Capture and withdrawal delivery use bounded retries; failures are reported without
+request values. Failed handoffs remain in memory for an explicit `flush()` retry,
+up to 24 hours. Closing the page can lose unacknowledged work. The collector's
+24-hour staging window bounds unclaimed captures, and only identified sessions
+produce a cell-side summary. Ad-network conversion postbacks are not part of this SDK.

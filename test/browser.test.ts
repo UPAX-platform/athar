@@ -88,12 +88,13 @@ describe('browser tracking', () => {
     localStorage.setItem('_athar:public-site:consent', 'denied');
     window.dispatchEvent(new StorageEvent('storage', { key: '_athar:public-site:consent', newValue: 'denied' }));
     await client.flush();
-    expect(fetcher).not.toHaveBeenCalled();
+    expect(events()).toHaveLength(0);
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toMatchObject({ consent: 'denied' });
     expect(client.getConsent()).toBe('denied');
   });
 
   it('aborts in-flight deliveries when consent is revoked', async () => {
-    fetcher.mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+    fetcher.mockImplementation((url, init) => String(url).endsWith('/v1/attribution') ? Promise.resolve(new Response(null, { status: 204 })) : new Promise((_resolve, reject) => {
       init.signal.addEventListener('abort', () => reject(new Error('aborted')));
     }));
     const client = create({ consent: 'granted' });
@@ -105,7 +106,7 @@ describe('browser tracking', () => {
   });
 
   it('cancels a retry backoff promptly when consent is revoked', async () => {
-    fetcher.mockResolvedValue(new Response(null, { status: 503 }));
+    fetcher.mockImplementation(url => Promise.resolve(new Response(null, { status: String(url).endsWith('/v1/attribution') ? 204 : 503 })));
     const client = create({ consent: 'granted', retryDelay: 60000 });
     client.track('retrying');
     const pending = client.flush();
@@ -113,7 +114,7 @@ describe('browser tracking', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     client.setConsent('denied');
     await rejected;
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls.filter(call => String(call[0]).endsWith('/v1/e'))).toHaveLength(1);
   });
 
   it('honors DNT without creating persistent identifiers', () => {
@@ -180,4 +181,86 @@ describe('browser tracking', () => {
     expect(client.track('private-context')).toBe(true);
     await client.flush(); expect(events()[0].vid).toMatch(/^v-/);
   });
+});
+
+it('captures every platform descriptor while keeping identifiers and unrelated query data out', async () => {
+  const { attributionParams } = await import('../src/attribution-params');
+  const params = new URLSearchParams();
+  const expected: Record<string, string> = {};
+  for (const p of attributionParams) {
+    params.set(p.param, p.class === 'descriptor' ? `value-${p.param}` : 'private-click');
+    if (p.class === 'descriptor') expected[p.param] = `value-${p.param}`;
+    if ('aliases' in p) for (const alias of p.aliases) params.set(alias, 'private-click');
+  }
+  params.set('secret', 'private-query');
+  history.replaceState({}, '', `/?${params}`);
+  const client = create(); client.start();
+  await client.flush();
+  expect(events()[0].attribution).toEqual(expected);
+  expect(JSON.stringify(events())).not.toContain('private-');
+  history.pushState({}, '', '/next');
+  await client.flush();
+  expect(events()[1].attribution).toBeUndefined();
+});
+
+it('reads attribution and UTM from router URL overrides and filters click IDs even with includeQuery', async () => {
+  const client = create({ includeQuery: true });
+  client.page({ url: '/landing?campaign_id=123&utm_source=ad&gclid=private-click&sccid=private-click',
+    referrer: 'https://other.example/?fbclid=private-click&keep=yes' });
+  await client.flush();
+  expect(events()[0]).toMatchObject({ attribution: { campaign_id: '123' }, utm: { source: 'ad' } });
+  expect(events()[0].ref).toBe('https://other.example/?keep=yes');
+  expect(JSON.stringify(events())).not.toContain('private-click');
+});
+
+it('hands off click IDs only after consent, once per session, outside analytics and browser storage', async () => {
+  history.replaceState({}, '', '/?gclid=private-click&campaign_id=123&placement=feed');
+  const hook = vi.fn(event => event);
+  const client = create({ beforeSend: hook });
+  client.start(); await client.flush();
+  expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/v1/attribution'))).toBe(false);
+  client.setConsent('granted'); await client.flush();
+  client.track('another'); await client.flush();
+  const handoffs = fetcher.mock.calls.filter(call => String(call[0]).endsWith('/v1/attribution'));
+  expect(handoffs).toHaveLength(1);
+  expect(JSON.parse(handoffs[0]![1].body)).toMatchObject({ consent: 'granted',
+    params: { gclid: 'private-click', campaign_id: '123', placement: 'feed' } });
+  expect(JSON.stringify(events())).not.toContain('private-click');
+  expect(JSON.stringify(hook.mock.calls)).not.toContain('private-click');
+  expect(JSON.stringify({ ...localStorage, ...sessionStorage })).not.toContain('private-click');
+  client.setConsent('denied'); await client.flush();
+  const revoke = JSON.parse(fetcher.mock.calls.at(-1)![1].body);
+  expect(revoke).toMatchObject({ consent: 'denied', vid: JSON.parse(handoffs[0]![1].body).vid });
+  expect(revoke.params).toBeUndefined();
+});
+
+it('does not capture conflicting identifiers, including duplicate query keys', async () => {
+  const client = create({ consent: 'granted' });
+  history.replaceState({}, '', '/?gclid=one&fbclid=two');
+  client.start(); await client.flush();
+  history.replaceState({}, '', '/?gclid=one&gclid=two');
+  client.track('again'); await client.flush();
+  expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/v1/attribution'))).toBe(false);
+});
+
+it('aborts pending click capture and sends a token-free withdrawal on reset', async () => {
+  history.replaceState({}, '', '/?gclid=private-click');
+  let captureSignal: AbortSignal | undefined;
+  fetcher.mockImplementation((url, init) => {
+    const body = JSON.parse(init.body);
+    if (String(url).endsWith('/v1/attribution') && body.consent === 'granted') {
+      captureSignal = init.signal;
+      return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))));
+    }
+    return Promise.resolve(new Response(null, { status: 204 }));
+  });
+  const client = create({ consent: 'granted', autoPageviews: false });
+  client.start();
+  const pending = client.flush();
+  const rejected = expect(pending).rejects.toThrow('Attribution delivery failed');
+  client.reset();
+  await rejected;
+  await client.flush();
+  expect(captureSignal?.aborted).toBe(true);
+  expect(JSON.parse(fetcher.mock.calls.at(-1)![1].body).consent).toBe('denied');
 });

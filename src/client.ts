@@ -1,4 +1,5 @@
-import type { AnalyticsClient, AnalyticsEvent, ClientOptions, EventContext, Identity, Properties } from './types';
+import { clickAttribution, filterAttribution, stripClickIds } from './attribution';
+import type { AnalyticsClient, AnalyticsEvent, AttributionContext, ClientOptions, EventContext, Identity, Properties } from './types';
 
 const encoder = new TextEncoder();
 export const bytes = (value: string): number => encoder.encode(value).length;
@@ -32,6 +33,13 @@ export function createInternalClient(options: ClientOptions) {
   const retries = integer(options.maxRetries, 2, 0, 10);
   const retryDelay = integer(options.retryDelay, 250, 0, 60000);
   let queue: AnalyticsEvent[] = [];
+  type Handoff = { body: string; revoke: boolean; at: number; vid: string };
+  let handoffs: Handoff[] = [];
+  let handoffActive: Promise<void> | undefined;
+  let handoffRemaining = 0;
+  let currentHandoff: Handoff | undefined;
+  let restartHandoffs = false;
+  const handoffControllers = new Set<AbortController>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let active: Promise<void> | undefined;
   let remaining = 0;
@@ -44,7 +52,7 @@ export function createInternalClient(options: ClientOptions) {
     try { options.onError?.(error instanceof Error ? error : new Error(String(error))); } catch { /* Observer isolation. */ }
   }
   function schedule(): void {
-    if (!interval || timer || stopped || !queue.length) return;
+    if (!interval || timer || stopped || (!queue.length && !handoffs.length)) return;
     timer = setTimeout(() => {
       timer = undefined;
       void flush().catch(report);
@@ -54,11 +62,12 @@ export function createInternalClient(options: ClientOptions) {
   }
   function cancelTimer(): void { clearTimeout(timer); timer = undefined; }
 
-  async function send(path: string, body: string, version: number): Promise<void> {
+  async function send(path: string, body: string, version: number, revoke = false, stillAllowed = () => true): Promise<void> {
     for (let attempt = 0; ; attempt++) {
-      if (version !== generation) throw new Error('Delivery cancelled');
+      if (!stillAllowed() || (!revoke && version !== generation)) throw new Error('Delivery cancelled');
       const controller = new AbortController();
-      controllers.add(controller);
+      if (!revoke) controllers.add(controller);
+      if (!revoke && path === '/v1/attribution') handoffControllers.add(controller);
       let retryable = true;
       let retryAfter = 0;
       let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -82,20 +91,23 @@ export function createInternalClient(options: ClientOptions) {
         }
         throw new Error(`Collector returned HTTP ${response.status}`);
       } catch (error) {
-        if (version !== generation || !retryable || attempt >= retries) throw error;
+        if (!stillAllowed() || (!revoke && version !== generation) || !retryable || attempt >= retries) throw error;
       } finally {
         clearTimeout(deadline);
         controllers.delete(controller);
+        handoffControllers.delete(controller);
       }
       // Bound server-controlled delays so shutdown has a finite upper bound.
       const backoff = new AbortController();
-      controllers.add(backoff);
+      if (!revoke) controllers.add(backoff);
+      if (!revoke && path === '/v1/attribution') handoffControllers.add(backoff);
       await new Promise<void>(resolve => {
         const delay = Math.min(60000, Math.max(retryAfter || 0, retryDelay * 2 ** attempt * (0.5 + Math.random())));
         const wakeup = setTimeout(resolve, delay);
         backoff.signal.addEventListener('abort', () => { clearTimeout(wakeup); resolve(); }, { once: true });
       });
       controllers.delete(backoff);
+      handoffControllers.delete(backoff);
     }
   }
 
@@ -108,7 +120,7 @@ export function createInternalClient(options: ClientOptions) {
     return result;
   }
 
-  function flush(): Promise<void> {
+  function flushEvents(): Promise<void> {
     if (active) { remaining = queue.length; return active; }
     cancelTimer();
     // Only drain events present at entry; a busy producer cannot prevent shutdown.
@@ -128,16 +140,82 @@ export function createInternalClient(options: ClientOptions) {
     return active;
   }
 
+  function flushHandoffs(): Promise<void> {
+    if (handoffActive) { handoffRemaining = handoffs.length; return handoffActive; }
+    const version = generation;
+    handoffRemaining = handoffs.length;
+    handoffActive = (async () => {
+      while (handoffRemaining > 0 && handoffs.length) {
+        const item = handoffs[0]!;
+        currentHandoff = item;
+        if (Date.now() - item.at < 24 * 60 * 60 * 1000) {
+          try { await send('/v1/attribution', item.body, version, item.revoke, () => handoffs.includes(item)); }
+          catch { throw new Error('Attribution delivery failed'); }
+        }
+        if (handoffs[0] === item) { handoffs.shift(); handoffRemaining--; }
+        if (version !== generation) break;
+      }
+    })().finally(() => {
+      handoffActive = undefined;
+      currentHandoff = undefined;
+      const restart = restartHandoffs || version !== generation;
+      restartHandoffs = false;
+      if (restart && handoffs.length) void flushHandoffs().catch(report);
+    });
+    return handoffActive;
+  }
+
+  function flush(): Promise<void> {
+    const events = flushEvents();
+    if (!handoffs.length && !handoffActive) return events;
+    return Promise.all([events, flushHandoffs()]).then(() => {});
+  }
+
+  function enqueueHandoff(body: Record<string, unknown> & { vid: string }, revoke: boolean, at: number): boolean {
+    if (stopped) return false;
+    if (handoffs.length >= maxQueue) { report(new Error('Attribution queue is full')); return false; }
+    handoffs.push({ body: JSON.stringify(body), revoke, at, vid: body.vid });
+    void flushHandoffs().catch(() => report(new Error('Attribution delivery failed')));
+    schedule();
+    return true;
+  }
+
+  function captureAttribution(params: Record<string, string>, context: AttributionContext): boolean {
+    if (stopped || context.consent !== 'granted') return false;
+    const validID = (id: unknown): id is string => typeof id === 'string' && !!id.trim() && !id.includes('\0') && bytes(id) <= 128;
+    if (!validID(context.visitorId) || !validID(context.sessionId)) return false;
+    const at = context.timestamp ?? Date.now();
+    if (!Number.isSafeInteger(at) || at <= Date.now() - 86400000 || at > Date.now() + 300000) return false;
+    const values = clickAttribution(params);
+    if (!values) return false;
+    return enqueueHandoff({ site: options.site, id: randomId(), consent: 'granted',
+      sid: context.sessionId, vid: context.visitorId, ts: at, params: values }, false, at);
+  }
+
+  function revokeAttribution(visitorId: string): boolean {
+    if (!visitorId || visitorId.includes('\0') || bytes(visitorId) > 128) return false;
+    handoffs = handoffs.filter(item => item.revoke || item.vid !== visitorId);
+    if (currentHandoff?.vid === visitorId && !currentHandoff.revoke) {
+      restartHandoffs = true;
+      for (const controller of handoffControllers) controller.abort();
+    }
+    // No token is copied into the revocation request.
+    const at = Date.now();
+    return enqueueHandoff({ site: options.site, id: randomId(), consent: 'denied', vid: visitorId, ts: at }, true, at);
+  }
+
   function track(name: string, props: Properties = {}, context: EventContext = {}): boolean {
     if (stopped) return false;
     try {
       let event: AnalyticsEvent | null = {
         id: randomId(), ts: context.timestamp ?? Date.now(), name,
         url: context.url, ref: context.referrer, sid: context.sessionId,
-        vid: context.visitorId, utm: context.utm, props,
+        vid: context.visitorId, utm: context.utm, attribution: context.attribution, props,
       };
       event = options.beforeSend ? options.beforeSend(event) : event;
       if (event === null) return false;
+      event = { ...event, url: stripClickIds(event.url), ref: stripClickIds(event.ref),
+        attribution: filterAttribution(event.attribution) };
       // Snapshot caller-owned data and reject non-JSON values rather than silently losing them.
       const serialized = JSON.stringify(event, (_key, value: unknown) => {
         if (typeof value === 'bigint' || typeof value === 'function' || typeof value === 'symbol' ||
@@ -177,7 +255,7 @@ export function createInternalClient(options: ClientOptions) {
   }
 
   const client: AnalyticsClient = {
-    track, page: (context, props) => track('page_view', props, context), identify, flush,
+    track, page: (context, props) => track('page_view', props, context), identify, captureAttribution, revokeAttribution, flush,
     async shutdown() {
       stopped = true;
       cancelTimer();
@@ -192,10 +270,12 @@ export function createInternalClient(options: ClientOptions) {
     discard() {
       generation++;
       queue = [];
+      handoffs = handoffs.filter(item => item.revoke);
       cancelTimer();
       for (const controller of controllers) controller.abort();
     },
     beacon(sendBeacon: (url: string, body: string) => boolean) {
+      void flushHandoffs().catch(() => report(new Error('Attribution delivery failed')));
       if (active) return;
       cancelTimer();
       while (queue.length) {

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add consent-gated click-ID capture, a separate delivery queue, and token-free withdrawal on consent changes/reset.
+
+- Capture all platform campaign descriptors in browser/framework events and support explicit attribution in Node.js context.
+- Filter attribution against the published catalogue and remove click-ID query parameters from analytics URLs.
+- Capture UTM and campaign descriptors from router URL overrides.
+
 ## 0.1.0
 
 - Optional Vue, Angular, Svelte/SvelteKit, Next.js App Router, and Astro integrations.

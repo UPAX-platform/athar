@@ -1,3 +1,4 @@
+import { attributionFromURL, clickAttribution, queryAttribution } from './attribution';
 import { createInternalClient, randomId } from './client';
 import type { AnalyticsClient, ClientOptions, Consent, EventContext, Identity, Properties } from './types';
 
@@ -17,10 +18,12 @@ export interface BrowserOptions extends ClientOptions {
   sessionTimeout?: number;
 }
 
-export interface BrowserClient extends Omit<AnalyticsClient, 'identify'> {
+export interface BrowserClient extends Omit<AnalyticsClient, 'identify' | 'captureAttribution' | 'revokeAttribution'> {
   /** Records a pageview only when the sanitized URL changes. Used by router adapters. */
   pageIfChanged(context?: EventContext, props?: Properties): boolean;
   identify(identity: Identity): Promise<void>;
+  captureAttribution(params?: Record<string, string>): boolean;
+  revokeAttribution(): boolean;
   setConsent(state: Consent): void;
   getConsent(): Consent;
   /** Installs listeners once. Safe to restart after stop (including React Strict Mode). */
@@ -78,6 +81,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
   let lastActivity = Date.now();
   let lastPage: string | undefined;
   let previousPage: string | undefined;
+  let capturedScope: string | undefined;
   let cleanup: (() => void) | undefined;
 
   function storage(kind: 'localStorage' | 'sessionStorage', action: 'getItem' | 'setItem' | 'removeItem', name: string, value = ''): string | null {
@@ -132,7 +136,8 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     lastActivity = now;
     if (consent === 'granted') storage('sessionStorage', 'setItem', 'session', JSON.stringify({ id: session, at: now }));
     const utm: Record<string, string> = {};
-    const params = new URLSearchParams(w?.location.search);
+    const arrivalURL = override.url ? new URL(override.url, w?.location.href).href : w?.location.href ?? '';
+    const params = new URLSearchParams(new URL(arrivalURL).search);
     for (const field of ['source', 'medium', 'campaign', 'term', 'content']) {
       const value = params.get(`utm_${field}`);
       if (value) utm[field] = value;
@@ -142,19 +147,40 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       url: sanitize(override.url ?? w?.location.href ?? ''),
       referrer: sanitize(override.referrer ?? previousPage ?? w?.document.referrer ?? ''),
       utm: override.utm ?? utm,
+      attribution: override.attribution ?? attributionFromURL(arrivalURL),
       sessionId: session,
       visitorId: consent === 'granted' ? visitor : undefined,
     };
   }
   function track(name: string, props?: Properties, override?: EventContext): boolean {
     if (!allowed()) return false;
-    try { return core.track(name, props, context(override)); } catch (error) { internal.report(error); return false; }
+    try {
+      const ctx = context(override);
+      captureCurrent(override?.url, ctx);
+      return core.track(name, props, ctx);
+    } catch (error) { internal.report(error); return false; }
+  }
+  function captureCurrent(raw?: string, ctx?: EventContext, supplied?: Record<string, string>): boolean {
+    if (!allowed() || consent !== 'granted') return false;
+    const values = clickAttribution(supplied ?? queryAttribution(new URL(raw ?? w!.location.href, w!.location.href).href));
+    if (!values) return false;
+    ctx ??= context();
+    const scope = `${ctx.sessionId}:${ctx.visitorId}`;
+    if (capturedScope === scope) return false;
+    const accepted = core.captureAttribution(values, { consent: 'granted',
+      sessionId: ctx.sessionId!, visitorId: ctx.visitorId!, timestamp: Date.now() });
+    if (accepted) capturedScope = scope;
+    return accepted;
+  }
+  function revokeCurrent(): boolean {
+    const id = visitor ?? storage('localStorage', 'getItem', 'visitor');
+    return id ? core.revokeAttribution(id) : false;
   }
   function pageIfChanged(override: EventContext = {}, props?: Properties): boolean {
     if (!w || !allowed()) return false;
     try {
       const current = sanitize(override.url ?? w.location.href);
-      if (current === lastPage) return false;
+      if (current === lastPage) { captureCurrent(override.url); return false; }
       const referrer = override.referrer ?? lastPage ?? w.document.referrer;
       if (!track('page_view', props ?? { title: w.document.title }, { ...override, referrer })) return false;
       previousPage = sanitize(referrer);
@@ -169,6 +195,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     else void core.flush().catch(internal.report);
   }
   function clearIdentity(): void {
+    capturedScope = undefined;
     visitor = undefined;
     session = `s-${randomId()}`;
     lastActivity = Date.now();
@@ -178,10 +205,14 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
   const client: BrowserClient = {
     track,
     pageIfChanged,
+    captureAttribution: params => captureCurrent(undefined, undefined, params),
+    revokeAttribution: revokeCurrent,
     page: (override, props) => track('page_view', props ?? { title: w?.document.title ?? '' }, override),
     async identify(identity) {
       if (!allowed() || consent !== 'granted') return;
-      await core.identify(identity, context());
+      const ctx = context();
+      captureCurrent(undefined, ctx);
+      await core.identify(identity, ctx);
     },
     flush: () => core.flush(),
     async shutdown() { client.stop(); terminated = true; await core.shutdown(); },
@@ -191,9 +222,10 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       consent = state; loaded = true;
       if (state === 'unknown') storage('localStorage', 'removeItem', 'consent');
       else storage('localStorage', 'setItem', 'consent', state);
-      if (state !== 'granted') { internal.discard(); clearIdentity(); }
+      if (state !== 'granted') { internal.discard(); revokeCurrent(); clearIdentity(); }
       if (old !== state) { lastPage = undefined; previousPage = undefined; }
       if (running && options.autoPageviews !== false && state !== 'denied') autoPage();
+      else if (running && state === 'granted') captureCurrent();
     },
     getConsent() { loadConsent(); return consent; },
     setEnabled(value) {
@@ -201,12 +233,15 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       if (!value) internal.discard();
     },
     reset() {
-      internal.discard(); clearIdentity(); lastPage = undefined; previousPage = undefined;
+      internal.discard(); revokeCurrent(); clearIdentity(); lastPage = undefined; previousPage = undefined;
     },
     start() {
       if (!w || running || terminated) return;
       running = true;
       loadConsent();
+      if (consent !== 'granted' && (visitor || storage('localStorage', 'getItem', 'visitor'))) {
+        internal.discard(); revokeCurrent(); clearIdentity();
+      }
       const removeHistory = options.autoPageviews === false || options.historyTracking === false ? () => {} : subscribeHistory(w, autoPage);
       const visibility = () => { if (w.document.visibilityState === 'hidden') lifecycleFlush(); };
       const online = () => { if (allowed()) void core.flush().catch(internal.report); };
@@ -227,7 +262,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
         const saved = storage('localStorage', 'getItem', 'consent');
         consent = saved === 'granted' || saved === 'denied' ? saved : 'unknown';
         loaded = true;
-        if (consent !== 'granted') { internal.discard(); clearIdentity(); }
+        if (consent !== 'granted') { internal.discard(); revokeCurrent(); clearIdentity(); }
       };
       w.addEventListener('pagehide', lifecycleFlush);
       w.addEventListener('online', online);
@@ -243,6 +278,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
         w.document.removeEventListener('click', click);
       };
       if (options.autoPageviews !== false && options.initialPageview !== false) autoPage();
+      else if (allowed() && consent === 'granted') captureCurrent();
     },
     stop() { cleanup?.(); cleanup = undefined; running = false; },
   };
