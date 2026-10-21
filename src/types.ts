@@ -63,11 +63,11 @@ export interface AnalyticsClient {
   track(name: string, props?: Properties, context?: EventContext): boolean;
   page(context?: EventContext, props?: Properties): boolean;
   /** Resolves on HTTP acknowledgement; rejects on delivery failure. */
-  identify(identity: Identity, context: EventContext): Promise<void>;
+  identify(identity: Identity, context?: EventContext): Promise<void>;
   /** Queue a consented click-ID handoff; flush() waits for collector acknowledgement. */
-  captureAttribution(params: Record<string, string>, context: AttributionContext): boolean;
+  captureAttribution(params?: Record<string, string>, context?: AttributionContext): boolean;
   /** Revoke this visitor's pending click-ID handoffs. Rotate visitor ID before regranting. */
-  revokeAttribution(visitorId: string): boolean;
+  revokeAttribution(visitorId?: string): boolean;
   flush(): Promise<void>;
   /** Stops accepting events and drains the existing queue. May be retried. */
   shutdown(): Promise<void>;

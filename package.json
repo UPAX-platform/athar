@@ -165,6 +165,7 @@
     "@angular/core": "^22.2.3",
     "@angular/platform-browser": "^22.2.3",
     "@angular/router": "^22.2.3",
+    "@playwright/test": "^1.64.1",
     "@sveltejs/kit": "^3.1.0",
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",

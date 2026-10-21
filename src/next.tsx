@@ -3,7 +3,7 @@
 import { Suspense, useEffect, type ReactNode } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation.js';
 import { AtharProvider, useAthar } from '@upax/athar/react';
-import { createBrowserClient, type BrowserClient, type BrowserOptions } from './browser';
+import { createBrowserClient, type BrowserClient, type BrowserOptions } from '@upax/athar/browser';
 
 export interface NextClient extends BrowserClient { readonly autoPageviewsEnabled: boolean }
 
@@ -31,4 +31,4 @@ export function AtharNextProvider({ client, children }: {
 }
 
 export { useAthar };
-export type { BrowserClient, BrowserOptions } from './browser';
+export type { BrowserClient, BrowserOptions } from '@upax/athar/browser';

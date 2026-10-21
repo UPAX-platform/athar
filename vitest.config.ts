@@ -6,7 +6,9 @@ export default defineConfig({
   resolve: {
     conditions: ['browser'],
     alias: {
+      '@upax/athar/browser': fileURLToPath(new URL('./src/browser.ts', import.meta.url)),
       '@upax/athar/react': fileURLToPath(new URL('./src/react.tsx', import.meta.url)),
+      '@upax/athar/svelte': fileURLToPath(new URL('./src/svelte.ts', import.meta.url)),
       '$app/navigation': fileURLToPath(new URL('./test/fixtures/kit-navigation.ts', import.meta.url)),
     },
   },
@@ -18,5 +20,5 @@ export default defineConfig({
       return { code: js.code, map: js.map };
     },
   }],
-  test: { restoreMocks: true },
+  test: { restoreMocks: true, exclude: ['test/browser/**', '**/node_modules/**', '**/dist/**'] },
 });

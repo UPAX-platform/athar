@@ -1,6 +1,6 @@
 import { afterNavigate } from '$app/navigation';
-import { provideAthar as provideSvelteAthar } from './svelte';
-import type { BrowserClient, BrowserOptions } from './browser';
+import { provideAthar as provideSvelteAthar } from '@upax/athar/svelte';
+import type { BrowserClient, BrowserOptions } from '@upax/athar/browser';
 
 /** Call in the root +layout.svelte script. Completed navigations drive pageviews. */
 export function provideAthar(options: BrowserOptions): BrowserClient {
@@ -14,5 +14,5 @@ export function provideAthar(options: BrowserOptions): BrowserClient {
   return client;
 }
 
-export { useAthar } from './svelte';
-export type { BrowserClient, BrowserOptions } from './browser';
+export { useAthar } from '@upax/athar/svelte';
+export type { BrowserClient, BrowserOptions } from '@upax/athar/browser';

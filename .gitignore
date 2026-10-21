@@ -6,3 +6,14 @@ coverage/
 .env.*
 .DS_Store
 .svelte-kit/
+
+.demo-config.json
+playwright-report/
+test-results/
+
+# Local-only demo and live-stack tests
+examples/local/
+scripts/setup-demo.mjs
+scripts/serve-demo.mjs
+test/browser/
+playwright.config.ts

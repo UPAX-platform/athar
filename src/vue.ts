@@ -1,5 +1,5 @@
 import { inject, nextTick, type InjectionKey, type Plugin } from 'vue';
-import { createBrowserClient, type BrowserClient, type BrowserOptions } from './browser';
+import { createBrowserClient, type BrowserClient, type BrowserOptions } from '@upax/athar/browser';
 import { createRouterAdapter, stopAndFlush } from './adapter';
 
 const atharKey: InjectionKey<BrowserClient> = Symbol('athar');
@@ -42,4 +42,4 @@ export function useAthar(): BrowserClient {
   return client;
 }
 
-export type { BrowserClient, BrowserOptions } from './browser';
+export type { BrowserClient, BrowserOptions } from '@upax/athar/browser';

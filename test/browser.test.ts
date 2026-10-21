@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createClient } from '../src/index';
 import { createBrowserClient, type BrowserClient, type BrowserOptions } from '../src/browser';
 
 const clients: BrowserClient[] = [];
@@ -15,6 +16,7 @@ const events = () => fetcher.mock.calls.filter(call => String(call[0]).endsWith(
 
 beforeEach(() => {
   localStorage.clear(); sessionStorage.clear();
+  document.cookie = '_athar_v=;path=/;max-age=0';
   window.history.replaceState({}, '', '/');
   document.body.innerHTML = '';
   Object.defineProperty(window.navigator, 'doNotTrack', { configurable: true, get: () => null });
@@ -55,18 +57,20 @@ describe('browser tracking', () => {
     b.stop(); expect(history.pushState).toBe(original);
   });
 
-  it('runs anonymously without storage or identity calls until granted; denial stops all collection', async () => {
+  it('runs anonymously with only a tab session and no identity calls until granted; denial stops all collection', async () => {
     const client = create();
     client.track('anonymous');
-    await client.identify({ external_id: 'user-1' });
+    expect(await client.identify({ external_id: 'user-1' })).toBe(false);
     await client.flush();
     expect(events()[0].vid).toBeUndefined();
-    expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
+    expect(localStorage.length).toBe(0); expect(document.cookie).toBe('');
+    expect(Object.keys(sessionStorage)).toEqual(['_athar:public-site:session']);
     expect(fetcher).toHaveBeenCalledTimes(1);
     client.setConsent('granted');
     client.track('known');
-    await client.identify({ external_id: 'user-1' });
+    expect(await client.identify({ external_id: 'user-1' })).toBe(true);
     await client.flush();
+    expect(events()[1].sid).toBe(events()[0].sid);
     expect(events()[1].vid).toMatch(/^v-/);
     expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/v1/id'))).toBe(true);
     client.track('queued-before-denial');
@@ -75,7 +79,8 @@ describe('browser tracking', () => {
     await client.identify({ email: 'someone@example.com' });
     await client.flush();
     expect(events()).toHaveLength(2);
-    expect(localStorage.getItem('_athar:public-site:visitor')).toBeNull();
+    expect(localStorage.getItem('_athar_v')).toBeNull();
+    expect(document.cookie).not.toContain('_athar_v');
     expect(sessionStorage.length).toBe(0);
   });
 
@@ -121,7 +126,7 @@ describe('browser tracking', () => {
     const client = create({ consent: 'granted' });
     vi.spyOn(window.navigator, 'doNotTrack', 'get').mockReturnValue('1');
     expect(client.track('dnt')).toBe(false);
-    expect(localStorage.length).toBe(0);
+    expect(localStorage.length).toBe(0); expect(document.cookie).toBe('');
   });
 
   it('honors global privacy control without creating persistent identifiers', () => {
@@ -263,4 +268,264 @@ it('aborts pending click capture and sends a token-free withdrawal on reset', as
   await client.flush();
   expect(captureSignal?.aborted).toBe(true);
   expect(JSON.parse(fetcher.mock.calls.at(-1)![1].body).consent).toBe('denied');
+});
+
+ it('automatically collects context through the main entry point and preserves overrides', async () => {
+  history.replaceState({}, '', '/landing?utm_source=newsletter&utm_campaign=launch&campaign_name=launch&gclid=click-one');
+  const client = createClient({ site: 'public-site', host: 'https://collector.example', fetch: fetcher,
+    flushInterval: 0, consent: 'granted' });
+  clients.push(client as BrowserClient);
+  client.track('signup');
+  await client.identify({ external_id: 'account-1' });
+  await client.flush();
+  const first = events()[0];
+  expect(first).toMatchObject({ name: 'page_view', url: 'http://localhost:3000/landing',
+    utm: { source: 'newsletter', campaign: 'launch' }, attribution: { campaign_name: 'launch' } });
+  expect(first.vid).toMatch(/^v-/);
+  expect(first.sid).toMatch(/^s-/);
+  expect(events()[1]).toMatchObject({ vid: first.vid, sid: first.sid });
+  expect(JSON.parse(fetcher.mock.calls.find(call => call[0].endsWith('/v1/id'))![1].body).vid).toBe(first.vid);
+  expect(JSON.parse(fetcher.mock.calls.find(call => call[0].endsWith('/v1/attribution'))![1].body))
+    .toMatchObject({ vid: first.vid, sid: first.sid, params: { gclid: 'click-one' } });
+  client.track('override', {}, { visitorId: 'custom-v', sessionId: 'custom-s',
+    url: '/other?utm_source=url', referrer: 'https://ref.example/path', timestamp: 1700000000000,
+    utm: { source: 'manual' }, attribution: { campaign_name: 'manual' } });
+  await client.identify({ external_id: 'account-2' }, { visitorId: 'custom-v' });
+  await client.flush();
+  expect(events()[2]).toMatchObject({ vid: 'custom-v', sid: 'custom-s', ts: 1700000000000,
+    url: 'http://localhost:3000/other', ref: 'https://ref.example/path',
+    utm: { source: 'manual' }, attribution: { campaign_name: 'manual' } });
+  (client as BrowserClient).setConsent('denied');
+  await client.flush();
+  expect(fetcher.mock.calls.filter(call => call[0].endsWith('/v1/attribution'))
+    .map(call => JSON.parse(call[1].body))).toContainEqual(expect.objectContaining({ vid: 'custom-v', consent: 'denied' }));
+});
+
+it('keeps caller identity overrides consent gated', async () => {
+  const client = create();
+  client.track('anonymous', {}, { visitorId: 'custom-v', sessionId: 'custom-s' });
+  await client.identify({ external_id: 'account' }, { visitorId: 'custom-v' });
+  await client.flush();
+  expect(events()[0]).toMatchObject({ sid: 'custom-s' });
+  expect(events()[0].vid).toBeUndefined();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+const storedVid = 'v-' + 'a'.repeat(32);
+const storedSid = 's-' + 'b'.repeat(32);
+
+it('synchronizes reset with stopped and manual clients without restoring old IDs', async () => {
+  const a = create({ consent: 'granted' });
+  const b = create({ consent: 'granted' });
+  a.track('a'); b.track('b'); await a.flush(); await b.flush();
+  const old = events()[0];
+  expect(events()[1]).toMatchObject({ vid: old.vid, sid: old.sid });
+  b.track('discard-me'); b.stop(); a.reset();
+  a.track('new-a'); b.track('new-b'); await a.flush(); await b.flush();
+  expect(events().map(event => event.name)).not.toContain('discard-me');
+  expect(events()[2].vid).not.toBe(old.vid);
+  expect(events()[2].sid).not.toBe(old.sid);
+  expect(events()[3]).toMatchObject({ vid: events()[2].vid, sid: events()[2].sid });
+});
+
+it('invalidates another tab session on a reset revision without deleting its new visitor', async () => {
+  const client = create({ consent: 'granted', autoPageviews: false }); client.start();
+  client.track('old'); await client.flush();
+  const old = events()[0];
+  client.track('stale-queued');
+  client.stop();
+  localStorage.setItem('_athar:public-site:revision', 'remote-reset');
+  localStorage.setItem('_athar_v', storedVid);
+  window.dispatchEvent(new StorageEvent('storage', { key: '_athar:public-site:revision' }));
+  client.track('new'); await client.flush();
+  expect(events()[1].vid).toBe(storedVid);
+  expect(events()[1].sid).not.toBe(old.sid);
+});
+
+it.each(['bad-id', 'future', 'expired', 'malformed'])('rejects invalid stored identity/session data: %s', async kind => {
+  localStorage.setItem('_athar_v', 'invalid');
+  localStorage.setItem('_athar:public-site:session', kind === 'malformed' ? 'null' : JSON.stringify({
+    id: kind === 'bad-id' ? 'invalid' : storedSid,
+    at: Date.now() + (kind === 'future' ? 60000 : kind === 'expired' ? -1800001 : 0),
+  }));
+  const client = create({ consent: 'granted' }); client.track('valid'); await client.flush();
+  expect(events()[0].vid).toMatch(/^v-[a-f0-9]{32}$/);
+  expect(events()[0].sid).toMatch(/^s-[a-f0-9]{32}$/);
+  expect(events()[0].sid).not.toBe(storedSid);
+});
+
+it('reuses generated IDs across client recreation without persisting call overrides', async () => {
+  const a = create({ consent: 'granted' });
+  a.track('first'); await a.flush();
+  const first = events()[0];
+  a.track('override', {}, { visitorId: 'caller-v', sessionId: 'caller-s' }); await a.flush();
+  const b = create({ consent: 'granted' });
+  b.track('recreated'); await b.flush();
+  expect(events()[2]).toMatchObject({ vid: first.vid, sid: first.sid });
+});
+
+it('synchronizes reset and withdrawal between clients when storage is blocked', async () => {
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+  vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => { throw new Error('blocked'); });
+  const a = create({ consent: 'granted' });
+  const b = create({ consent: 'granted' });
+  b.track('before'); await b.flush();
+  const before = events()[0];
+  a.reset(); b.track('after'); await b.flush();
+  expect(events()[1].vid).not.toBe(before.vid);
+  expect(events()[1].sid).not.toBe(before.sid);
+  a.setConsent('unknown');
+  expect(b.getConsent()).toBe('unknown');
+  b.track('anonymous'); await b.flush();
+  expect(events()[2].vid).toBeUndefined();
+});
+
+it('exposes generated context for integrations without queuing events and respects consent', async () => {
+  history.replaceState({}, '', '/form?utm_source=newsletter&campaign_id=launch&gclid=private');
+  const client = create();
+  const anonymous = client.getContext();
+  expect(anonymous?.visitorId).toBeUndefined();
+  client.setConsent('granted');
+  const ctx = client.getContext();
+  expect(ctx).toMatchObject({ url: 'http://localhost:3000/form', utm: { source: 'newsletter' }, attribution: { campaign_id: 'launch' } });
+  expect(ctx?.visitorId).toMatch(/^v-[a-f0-9]{32}$/);
+  expect(client.getContext({ visitorId: 'caller' })?.visitorId).toBe('caller');
+  expect(client.getContext()?.visitorId).toBe(ctx?.visitorId);
+  await client.flush();
+  expect(events()).toHaveLength(0);
+  client.setConsent('denied');
+  expect(client.getContext()).toBeUndefined();
+});
+
+it('does not resurrect a visitor written by a stale tab during reset', async () => {
+  const client = create({ consent: 'granted' });
+  const before = client.getContext()!;
+  const stale = localStorage.getItem('_athar_v')!;
+  client.reset();
+  localStorage.setItem('_athar_v', stale);
+  expect(client.getContext()?.visitorId).not.toBe(before.visitorId);
+});
+
+const cookieVid = () => ('; ' + document.cookie).split('; _athar_v=')[1]?.split(';')[0];
+
+it('shares the visitor ID with the platform tracker and form embeds through _athar_v', async () => {
+  const client = create({ consent: 'granted' });
+  const vid = client.getContext()!.visitorId;
+  expect(localStorage.getItem('_athar_v')).toBe(vid);
+  expect(cookieVid()).toBe(vid);
+  client.reset();
+  expect(localStorage.getItem('_athar_v')).toBeNull();
+  expect(cookieVid()).toBeUndefined();
+  localStorage.clear();
+  document.cookie = `_athar_v=${storedVid};path=/`;
+  expect(create({ consent: 'granted' }).getContext()!.visitorId).toBe(storedVid);
+  expect(localStorage.getItem('_athar_v')).toBe(storedVid);
+});
+
+it('does not remove a shared visitor ID when consent is merely unknown', () => {
+  localStorage.setItem('_athar_v', storedVid);
+  const client = create(); client.start();
+  expect(client.getContext()!.visitorId).toBeUndefined();
+  expect(localStorage.getItem('_athar_v')).toBe(storedVid);
+});
+
+it('builds full form context after navigation without storing click IDs', async () => {
+  Object.defineProperty(document, 'referrer', { configurable: true, get: () => 'https://search.example/results?q=private' });
+  history.replaceState({}, '', '/?utm_source=google&utm_campaign=launch&campaign_id=c1&gclid=private-click');
+  const client = create({ consent: 'granted' }); client.start();
+  expect(client.getFormContext()).toMatchObject({ gclid: 'private-click', campaign_id: 'c1' });
+  history.pushState({}, '', '/newsletter');
+  document.title = 'Newsletter';
+  Object.defineProperty(document, 'referrer', { configurable: true, get: () => 'http://localhost:3000/' });
+  const form = client.getFormContext();
+  expect(form).toEqual({ page_url: 'http://localhost:3000/newsletter', page_title: 'Newsletter',
+    referrer: 'https://search.example/results', visitor_id: client.getContext()!.visitorId, consent: 'granted',
+    utm_source: 'google', utm_campaign: 'launch', campaign_id: 'c1' });
+  expect(JSON.stringify({ ...localStorage, ...sessionStorage, cookie: document.cookie })).not.toContain('private-click');
+  await client.flush();
+  expect(events().filter(event => event.name === 'page_view')).toHaveLength(2);
+  client.setConsent('denied');
+  expect(client.getFormContext()).toEqual({ page_url: 'http://localhost:3000/newsletter', page_title: 'Newsletter',
+    referrer: 'http://localhost:3000/', consent: 'denied' });
+  delete (document as unknown as Record<string, unknown>).referrer;
+});
+
+it('replaces the stored campaign on a new click arrival and keeps unconsented campaigns tab-scoped', () => {
+  history.replaceState({}, '', '/?utm_source=first&campaign_id=c1');
+  const client = create();
+  client.getFormContext();
+  expect(localStorage.length).toBe(0);
+  history.replaceState({}, '', '/?fbclid=click');
+  client.getFormContext();
+  history.replaceState({}, '', '/later');
+  expect(client.getFormContext().utm_source).toBeUndefined();
+  expect(client.getFormContext().fbclid).toBeUndefined();
+  history.replaceState({}, '', '/?utm_source=second');
+  client.getFormContext();
+  client.setConsent('granted');
+  history.replaceState({}, '', '/later');
+  expect(client.getFormContext().utm_source).toBe('second');
+  expect(localStorage.getItem('_athar:public-site:campaign')).toContain('second');
+});
+
+it('does not duplicate the current pageview when consent is granted, but records it after a denial', async () => {
+  const client = create(); client.start();
+  client.setConsent('granted');
+  await client.flush();
+  expect(events().filter(event => event.name === 'page_view')).toHaveLength(1);
+  client.setConsent('denied'); client.setConsent('granted');
+  await client.flush();
+  expect(events().filter(event => event.name === 'page_view')).toHaveLength(2);
+});
+
+it('continues sessions across page loads before consent and across tabs after consent', async () => {
+  const first = create(); first.track('one');
+  const reload = create(); reload.track('two');
+  await first.flush(); await reload.flush();
+  expect(events()[1].sid).toBe(events()[0].sid);
+  first.setConsent('granted');
+  const granted = first.getContext()!.sessionId;
+  sessionStorage.clear(); // A new tab has empty session storage.
+  const tab = create({ consent: 'granted' });
+  expect(tab.getContext()!.sessionId).toBe(granted);
+});
+
+it('reads context without extending the session', async () => {
+  const now = Date.now();
+  const client = create({ consent: 'granted', sessionTimeout: 1000 });
+  client.track('start'); await client.flush();
+  vi.spyOn(Date, 'now').mockReturnValue(now + 900);
+  expect(client.getContext()!.sessionId).toBe(events()[0].sid);
+  vi.spyOn(Date, 'now').mockReturnValue(now + 1500);
+  client.track('later'); await client.flush();
+  expect(events()[1].sid).not.toBe(events()[0].sid);
+});
+
+it('shares document identity state between separately loaded SDK copies', async () => {
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+  vi.resetModules();
+  // @ts-expect-error A query import loads a second instance of the module.
+  const copy: typeof import('../src/browser') = await import('../src/browser?copy');
+  const a = create({ consent: 'granted' });
+  const b = copy.createBrowserClient({ site: 'public-site', host: 'https://collector.example', fetch: fetcher, flushInterval: 0, consent: 'granted' });
+  clients.push(b);
+  const before = b.getContext()!.sessionId;
+  a.reset();
+  expect(b.getContext()!.sessionId).not.toBe(before);
+});
+
+it('shares a known consent decision through _athar_c for form embeds', () => {
+  const client = create(); client.start();
+  expect(localStorage.getItem('_athar_c')).toBeNull();
+  expect(client.getFormContext().consent).toBeUndefined();
+  client.setConsent('granted');
+  expect(localStorage.getItem('_athar_c')).toBe('granted');
+  client.setConsent('denied');
+  expect(localStorage.getItem('_athar_c')).toBe('denied');
+  client.setConsent('unknown');
+  expect(localStorage.getItem('_athar_c')).toBeNull();
+  create({ consent: 'granted' }).start();
+  expect(localStorage.getItem('_athar_c')).toBe('granted');
 });

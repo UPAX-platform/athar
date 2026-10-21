@@ -6,6 +6,14 @@ export const bytes = (value: string): number => encoder.encode(value).length;
 export const randomId = (): string => Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)),
   value => value.toString(16).padStart(2, '0')).join('');
 
+/** An HTTP refusal; `status` lets callers distinguish rejected payloads from transient failures. */
+export class CollectorError extends Error {
+  constructor(readonly status: number) { super(`Collector returned HTTP ${status}`); this.name = 'CollectorError'; }
+}
+/** The collector rejected the payload itself; resending it can never succeed. */
+const rejectedPayload = (error: unknown): boolean =>
+  error instanceof CollectorError && (error.status === 400 || error.status === 413);
+
 function integer(value: number | undefined, fallback: number, min: number, max: number): number {
   const result = value ?? fallback;
   if (!Number.isInteger(result) || result < min || result > max) {
@@ -43,6 +51,8 @@ export function createInternalClient(options: ClientOptions) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let active: Promise<void> | undefined;
   let remaining = 0;
+  let inFlight = 0;
+  let failures = 0;
   let stopped = false;
   let generation = 0;
   const controllers = new Set<AbortController>();
@@ -51,12 +61,12 @@ export function createInternalClient(options: ClientOptions) {
   function report(error: unknown): void {
     try { options.onError?.(error instanceof Error ? error : new Error(String(error))); } catch { /* Observer isolation. */ }
   }
-  function schedule(): void {
+  function schedule(delay = interval): void {
     if (!interval || timer || stopped || (!queue.length && !handoffs.length)) return;
     timer = setTimeout(() => {
       timer = undefined;
       void flush().catch(report);
-    }, interval);
+    }, delay);
     // Analytics must not keep a Node.js process alive. Call shutdown before exit.
     (timer as unknown as { unref?: () => void }).unref?.();
   }
@@ -89,7 +99,7 @@ export function createInternalClient(options: ClientOptions) {
           retryAfter = /^\d+(\.\d+)?$/.test(header)
             ? Number(header) * 1000 : Math.max(0, Date.parse(header) - Date.now());
         }
-        throw new Error(`Collector returned HTTP ${response.status}`);
+        throw new CollectorError(response.status);
       } catch (error) {
         if (!stillAllowed() || (!revoke && version !== generation) || !retryable || attempt >= retries) throw error;
       } finally {
@@ -111,9 +121,9 @@ export function createInternalClient(options: ClientOptions) {
     }
   }
 
-  function batch(): AnalyticsEvent[] {
+  function batch(offset = 0): AnalyticsEvent[] {
     const result: AnalyticsEvent[] = [];
-    for (const event of queue.slice(0, batchSize)) {
+    for (const event of queue.slice(offset, offset + batchSize)) {
       if (bytes(JSON.stringify({ site: options.site, events: [...result, event] })) > 30000) break;
       result.push(event);
     }
@@ -130,13 +140,26 @@ export function createInternalClient(options: ClientOptions) {
     active = (async () => {
       while (remaining > 0 && queue.length && version === generation) {
         const events = batch().slice(0, remaining);
-        await send('/v1/e', JSON.stringify({ site: options.site, events }), version);
+        inFlight = events.length;
+        try {
+          await send('/v1/e', JSON.stringify({ site: options.site, events }), version);
+        } catch (error) {
+          // A rejected batch would otherwise block every later event in the queue.
+          if (version !== generation || !rejectedPayload(error)) throw error;
+          report(error);
+        } finally { inFlight = 0; }
         if (version !== generation) return;
         queue.splice(0, events.length);
         remaining -= events.length;
       }
       succeeded = true;
-    })().finally(() => { active = undefined; if (succeeded || version !== generation) schedule(); });
+    })().finally(() => {
+      active = undefined;
+      if (succeeded || version !== generation) { failures = 0; schedule(); return; }
+      // Retry failed deliveries without waiting for new events, backing off up to five minutes.
+      failures++;
+      schedule(Math.min(300000, interval * 2 ** failures));
+    });
     return active;
   }
 
@@ -180,8 +203,8 @@ export function createInternalClient(options: ClientOptions) {
     return true;
   }
 
-  function captureAttribution(params: Record<string, string>, context: AttributionContext): boolean {
-    if (stopped || context.consent !== 'granted') return false;
+  function captureAttribution(params: Record<string, string> = {}, context?: AttributionContext): boolean {
+    if (stopped || context?.consent !== 'granted') return false;
     const validID = (id: unknown): id is string => typeof id === 'string' && !!id.trim() && !id.includes('\0') && bytes(id) <= 128;
     if (!validID(context.visitorId) || !validID(context.sessionId)) return false;
     const at = context.timestamp ?? Date.now();
@@ -192,7 +215,7 @@ export function createInternalClient(options: ClientOptions) {
       sid: context.sessionId, vid: context.visitorId, ts: at, params: values }, false, at);
   }
 
-  function revokeAttribution(visitorId: string): boolean {
+  function revokeAttribution(visitorId?: string): boolean {
     if (!visitorId || visitorId.includes('\0') || bytes(visitorId) > 128) return false;
     handoffs = handoffs.filter(item => item.revoke || item.vid !== visitorId);
     if (currentHandoff?.vid === visitorId && !currentHandoff.revoke) {
@@ -240,7 +263,7 @@ export function createInternalClient(options: ClientOptions) {
     } catch (error) { report(error); return false; }
   }
 
-  function identify(identity: Identity, context: EventContext): Promise<void> {
+  function identify(identity: Identity, context: EventContext = {}): Promise<void> {
     if (stopped) return Promise.reject(new Error('Client is shut down'));
     const vid = context.visitorId || (context.sessionId ? `s:${context.sessionId}` : '');
     const email = identity.email?.trim();
@@ -276,14 +299,15 @@ export function createInternalClient(options: ClientOptions) {
     },
     beacon(sendBeacon: (url: string, body: string) => boolean) {
       void flushHandoffs().catch(() => report(new Error('Attribution delivery failed')));
-      if (active) return;
       cancelTimer();
-      while (queue.length) {
-        const events = batch();
+      // Events behind an in-flight keepalive request are still beaconed; that request owns its own batch.
+      const offset = active ? inFlight : 0;
+      while (queue.length > offset) {
+        const events = batch(offset);
         let accepted = false;
         try { accepted = sendBeacon(base + '/v1/e', JSON.stringify({ site: options.site, events })); } catch { /* Fall back to fetch. */ }
-        if (!accepted) { void flush().catch(report); return; }
-        queue.splice(0, events.length);
+        if (!accepted) { if (!active) void flush().catch(report); return; }
+        queue.splice(offset, events.length);
       }
     },
   };

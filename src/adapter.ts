@@ -1,4 +1,4 @@
-import { createBrowserClient, type BrowserClient, type BrowserOptions } from './browser';
+import { createBrowserClient, type BrowserClient, type BrowserOptions } from '@upax/athar/browser';
 
 /** Shared lifecycle for adapters which observe completed framework navigation. */
 export function createRouterAdapter(options: BrowserOptions) {

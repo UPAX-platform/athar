@@ -2,7 +2,7 @@ import { DestroyRef, InjectionToken, PLATFORM_ID, inject, makeEnvironmentProvide
 import { isPlatformBrowser } from '@angular/common';
 import { NavigationEnd, Router } from '@angular/router';
 import { stopAndFlush } from './adapter';
-import { createBrowserClient, type BrowserClient, type BrowserOptions } from './browser';
+import { createBrowserClient, type BrowserClient, type BrowserOptions } from '@upax/athar/browser';
 
 export const ATHAR = new InjectionToken<BrowserClient>('Athar analytics client');
 
@@ -36,4 +36,4 @@ export function provideAthar(options: BrowserOptions): EnvironmentProviders {
 }
 
 export function injectAthar(): BrowserClient { return inject(ATHAR); }
-export type { BrowserClient, BrowserOptions } from './browser';
+export type { BrowserClient, BrowserOptions } from '@upax/athar/browser';

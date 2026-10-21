@@ -207,3 +207,52 @@ it('lets a revocation bypass a failed capture and prevents token-bearing retries
   expect(fetcher.mock.calls[1]![1].body).not.toContain('secret-token');
   await client.shutdown();
 });
+
+it('drops batches the collector rejects so later events are delivered', async () => {
+  const onError = vi.fn();
+  const fetcher = vi.fn().mockResolvedValueOnce(new Response(null, { status: 413 })).mockResolvedValue(ok());
+  const client = createClient(config({ fetch: fetcher, batchSize: 1, onError }));
+  client.track('rejected'); client.track('next');
+  await client.flush();
+  expect(fetcher.mock.calls.map(call => JSON.parse(call[1].body).events[0].name)).toEqual(['rejected', 'next']);
+  expect(onError.mock.calls[0]![0]).toMatchObject({ name: 'CollectorError', status: 413 });
+  await client.shutdown();
+});
+
+it('schedules a backed-off retry after a failed flush', async () => {
+  vi.useFakeTimers();
+  try {
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(null, { status: 503 })).mockResolvedValue(ok());
+    const client = createClient(config({ fetch: fetcher, flushInterval: 1000, maxRetries: 0, onError() {} }));
+    client.track('retry');
+    await expect(client.flush()).rejects.toThrow('503');
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await client.shutdown();
+  } finally { vi.useRealTimers(); }
+});
+
+it('beacons events queued behind an in-flight request', async () => {
+  const { createInternalClient } = await import('../src/client');
+  let finish!: (response: Response) => void;
+  const fetcher = vi.fn(() => new Promise<Response>(resolve => { finish = resolve; }));
+  const internal = createInternalClient(config({ fetch: fetcher, batchSize: 1 }));
+  internal.client.track('in-flight');
+  const pending = internal.client.flush();
+  internal.client.track('queued');
+  const beacon = vi.fn().mockReturnValue(true);
+  internal.beacon(beacon);
+  expect(JSON.parse(beacon.mock.calls[0]![1]).events.map((event: any) => event.name)).toEqual(['queued']);
+  finish(ok());
+  await pending;
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+it('narrows the main entry point client and exposes an explicit server client', async () => {
+  const { createServerClient, isBrowserClient } = await import('../src/index');
+  const server = createServerClient(config({ fetch: vi.fn() }));
+  expect(isBrowserClient(server)).toBe(false);
+  expect(isBrowserClient(createBrowserClient(config({ fetch: vi.fn() })))).toBe(true);
+});

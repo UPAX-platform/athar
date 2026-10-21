@@ -1,5 +1,5 @@
 import { createRouterAdapter } from './adapter';
-import type { BrowserClient, BrowserOptions } from './browser';
+import type { BrowserClient, BrowserOptions } from '@upax/athar/browser';
 
 export interface AstroAnalytics {
   client: BrowserClient;
@@ -21,4 +21,4 @@ export function installAthar(options: BrowserOptions): AstroAnalytics {
   };
 }
 
-export type { BrowserClient, BrowserOptions } from './browser';
+export type { BrowserClient, BrowserOptions } from '@upax/athar/browser';

@@ -1,5 +1,5 @@
 import { getContext, onMount, setContext } from 'svelte';
-import { createBrowserClient, type BrowserClient, type BrowserOptions } from './browser';
+import { createBrowserClient, type BrowserClient, type BrowserOptions } from '@upax/athar/browser';
 import { stopAndFlush } from './adapter';
 
 const atharKey = Symbol.for('@upax/athar/svelte');
@@ -18,4 +18,4 @@ export function useAthar(): BrowserClient {
   return client;
 }
 
-export type { BrowserClient, BrowserOptions } from './browser';
+export type { BrowserClient, BrowserOptions } from '@upax/athar/browser';

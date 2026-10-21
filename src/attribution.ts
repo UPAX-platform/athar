@@ -41,7 +41,7 @@ export function stripClickIds(raw: string | undefined): string | undefined {
 }
 
 /** Resolve exactly one identifier claim; aliases of the same kind/value agree. */
-export function clickAttribution(input: Record<string, string>): Record<string, string> | undefined {
+export function clickId(input: Record<string, string>): { key: string; value: string } | undefined {
   let selected: { key: string; value: string } | undefined;
   for (const param of attributionParams) {
     if (param.class !== 'identifier') continue;
@@ -53,7 +53,21 @@ export function clickAttribution(input: Record<string, string>): Record<string, 
       selected = { key: param.param, value };
     }
   }
+  return selected;
+}
+
+export function clickAttribution(input: Record<string, string>): Record<string, string> | undefined {
+  const selected = clickId(input);
   return selected ? { ...filterAttribution(input), [selected.key]: selected.value } : undefined;
+}
+
+/** True when the URL carries any recognized click-ID parameter, valid or not. */
+export function hasClickId(raw: string): boolean {
+  try {
+    const params = new URL(raw).searchParams;
+    return attributionParams.some(param => param.class === 'identifier' &&
+      ('aliases' in param ? [param.param, ...param.aliases] : [param.param]).some(key => params.has(key)));
+  } catch { return false; }
 }
 
 export function queryAttribution(raw: string): Record<string, string> {

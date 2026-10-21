@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Add `getFormContext()`: the flat public-form context, with campaign tags and descriptors kept across navigation (90 days with consent, the tab without), the session's external referrer, and a consented click ID from the current URL. Click IDs are still never stored.
+- Share a granted or denied consent decision through `localStorage._athar_c` and include `consent` in `getFormContext()`, so form embeds and endpoints keep click IDs only with consent.
+- Store the consented visitor ID in `localStorage._athar_v` and the `_athar_v` cookie, matching the platform tracker and form embeds. Unknown consent no longer removes the shared ID.
+- Keep unknown-consent sessions for the tab (`sessionStorage`) instead of per page load; share granted sessions across tabs.
+- Granting consent no longer records the current page a second time.
+- `getContext()` no longer extends the session.
+- Browser `identify()` resolves `true` on acknowledgement and `false` when consent or privacy settings prevent it.
+- Drop batches refused with 400/413 (reported as `CollectorError`) instead of blocking the queue; schedule backed-off retries after failed flushes; beacon events queued behind an in-flight request.
+- Framework entries import `@upax/athar/browser` instead of bundling their own copy (about 1 KB each), and document state is shared between SDK copies.
+- Add `AtharClient`, `isBrowserClient`, and `createServerClient`.
+
+- Expose consent-aware browser `getContext()` for form integrations and bind persisted visitor IDs to reset revisions.
+
+- Validate generated IDs and stored session timestamps; synchronize identity resets across client instances and tabs.
+
+- Automatically start browser collection from `createClient`; preserve explicit browser lifecycle through `createBrowserClient`.
+- Honor browser identity/context overrides for events, identification, and attribution while preserving consent controls.
+
 - Configure catalogue sync with `ATHAR_ATTRIBUTION_SOURCE` (file path or HTTP(S) URL), with no default source.
 
 - Add consent-gated click-ID capture, a separate delivery queue, and token-free withdrawal on consent changes/reset.
