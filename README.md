@@ -369,6 +369,11 @@ The browser adds `start`, `stop`, `reset`, `setConsent`, `getConsent`,
 `true` on acknowledgement and `false` when consent, DNT, GPC, or a disabled
 client prevents it. Use `createBrowserClient` when these browser controls are needed.
 
+The first started browser client is also published as `window.athar`, so page
+scripts outside your bundle can reach it — UPAX form embeds call
+`window.athar.identify({ email })` after a successful submit. `stop()` or
+`shutdown()` removes it; a later client's `start()` takes the slot.
+
 `track`/`page` return whether the event was queued, not whether it was stored.
 Invalid or oversized events return false and call `onError`. Event names are
 limited to 128 UTF-8 bytes, URL/referrer to 2048 each, and properties to 2048

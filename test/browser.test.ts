@@ -57,6 +57,16 @@ describe('browser tracking', () => {
     b.stop(); expect(history.pushState).toBe(original);
   });
 
+  it('publishes the first started client as window.athar until it stops', () => {
+    const a = create(); const b = create({ site: 'other-site' });
+    expect(window.athar).toBeUndefined();
+    a.start(); b.start();
+    expect(window.athar).toBe(a);
+    b.stop(); expect(window.athar).toBe(a);
+    a.stop(); expect(window.athar).toBeUndefined();
+    b.start(); expect(window.athar).toBe(b);
+  });
+
   it('runs anonymously with only a tab session and no identity calls until granted; denial stops all collection', async () => {
     const client = create();
     client.track('anonymous');

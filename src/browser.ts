@@ -57,6 +57,13 @@ export interface BrowserClient extends Omit<AnalyticsClient, 'identify' | 'captu
   setEnabled(enabled: boolean): void;
 }
 
+declare global {
+  interface Window {
+    /** The first started browser client, for page scripts outside the application bundle such as form embeds. */
+    athar?: BrowserClient;
+  }
+}
+
 type Subscriber = () => void;
 type Store = 'localStorage' | 'sessionStorage';
 interface SiteState { revision: string; listeners: Set<() => void> }
@@ -463,6 +470,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     start() {
       if (!w || running || terminated) return;
       running = true;
+      if (!w.athar) w.athar = client;
       observeIdentity();
       syncIdentity(); loadConsent();
       if (consent !== 'unknown') shareConsent();
@@ -498,7 +506,10 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       if (options.autoPageviews !== false && options.initialPageview !== false) autoPage();
       else if (allowed() && consent === 'granted') captureCurrent();
     },
-    stop() { cleanup?.(); cleanup = undefined; running = false; },
+    stop() {
+      cleanup?.(); cleanup = undefined; running = false;
+      if (w?.athar === client) delete w.athar;
+    },
   };
   if (w) shared.listeners.add(syncIdentity);
   return client;
