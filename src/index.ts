@@ -22,5 +22,5 @@ export function isBrowserClient(client: AtharClient): client is BrowserClient {
 export { createClient as createServerClient } from './client';
 export { CollectorError } from './client';
 export { createBrowserClient } from './browser';
-export type { BrowserOptions, BrowserClient, FormContext } from './browser';
-export type { AnalyticsClient, AnalyticsEvent, AttributionContext, ClientOptions, Consent, EventContext, Identity, Json, Properties } from './types';
+export type { BrowserOptions, BrowserClient, ConsentChoice, FormContext } from './browser';
+export type { AnalyticsClient, AnalyticsEvent, AttributionContext, ClientOptions, Consent, ConsentScopes, EventContext, Identity, Json, Properties } from './types';

@@ -1,5 +1,5 @@
 import { clickAttribution, filterAttribution, stripClickIds } from './attribution';
-import type { AnalyticsClient, AnalyticsEvent, AttributionContext, ClientOptions, EventContext, Identity, Properties } from './types';
+import type { AnalyticsClient, AnalyticsEvent, AttributionContext, ClientOptions, ConsentScopes, EventContext, Identity, Properties } from './types';
 
 const encoder = new TextEncoder();
 export const bytes = (value: string): number => encoder.encode(value).length;
@@ -33,7 +33,7 @@ export function createInternalClient(options: ClientOptions) {
   }
   // Every route is `/athar/{site_token}/{member}` beneath the base, so a path-prefix proxy works unchanged.
   const base = `${host.href.replace(/\/+$/, '')}/athar/${encodeURIComponent(options.site)}`;
-  const path = { events: '/ev', identify: '/id', attribution: '/attr' } as const;
+  const path = { events: '/ev', identify: '/id', attribution: '/attr', consent: '/opt' } as const;
   const fetcher = options.fetch ?? globalThis.fetch?.bind(globalThis);
   if (!fetcher) throw new TypeError('A fetch implementation is required');
   const batchSize = integer(options.batchSize, 10, 1, 25);
@@ -50,6 +50,10 @@ export function createInternalClient(options: ClientOptions) {
   let currentHandoff: Handoff | undefined;
   let restartHandoffs = false;
   const handoffControllers = new Set<AbortController>();
+  /** Consent decisions awaiting delivery: at most one per visitor, the latest. */
+  type ConsentDelivery = { body: string; at: number; vid: string };
+  let consents: ConsentDelivery[] = [];
+  let consentActive: Promise<void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let active: Promise<void> | undefined;
   let remaining = 0;
@@ -64,7 +68,7 @@ export function createInternalClient(options: ClientOptions) {
     try { options.onError?.(error instanceof Error ? error : new Error(String(error))); } catch { /* Observer isolation. */ }
   }
   function schedule(delay = interval): void {
-    if (!interval || timer || stopped || (!queue.length && !handoffs.length)) return;
+    if (!interval || timer || stopped || (!queue.length && !handoffs.length && !consents.length)) return;
     timer = setTimeout(() => {
       timer = undefined;
       void flush().catch(report);
@@ -190,10 +194,49 @@ export function createInternalClient(options: ClientOptions) {
     return handoffActive;
   }
 
+  function flushConsents(): Promise<void> {
+    if (consentActive) return consentActive;
+    consentActive = (async () => {
+      while (consents.length) {
+        const item = consents[0]!;
+        // The collector accepts a decision for 24 hours; a newer one supersedes it on the way.
+        if (Date.now() - item.at < 24 * 60 * 60 * 1000) {
+          try { await send(path.consent, item.body, generation, true, () => consents.includes(item)); }
+          catch (error) {
+            if (consents.includes(item) && !rejectedPayload(error)) throw new Error('Consent delivery failed');
+            if (consents.includes(item)) report(error);
+          }
+        }
+        consents = consents.filter(entry => entry !== item);
+      }
+    })().finally(() => {
+      consentActive = undefined;
+      if (consents.length) schedule();
+    });
+    return consentActive;
+  }
+
   function flush(): Promise<void> {
     const events = flushEvents();
-    if (!handoffs.length && !handoffActive) return events;
-    return Promise.all([events, flushHandoffs()]).then(() => {});
+    const pending = [events];
+    if (handoffs.length || handoffActive) pending.push(flushHandoffs());
+    if (consents.length || consentActive) pending.push(flushConsents());
+    return pending.length === 1 ? events : Promise.all(pending).then(() => {});
+  }
+
+  function recordConsent(scopes: ConsentScopes, visitorId: string, timestamp = Date.now()): boolean {
+    if (stopped || typeof visitorId !== 'string' || !visitorId.trim() || visitorId.includes('\0') || bytes(visitorId) > 128) return false;
+    const states = ['unknown', 'granted', 'denied'];
+    if (!scopes || !states.includes(scopes.analytics) || !states.includes(scopes.advertising)) return false;
+    if (!Number.isSafeInteger(timestamp) || timestamp <= Date.now() - 86400000 || timestamp > Date.now() + 300000) return false;
+    // An undecided scope is omitted: the collector reads it as never decided.
+    const decided = (state: string) => state === 'unknown' ? undefined : state;
+    const body = JSON.stringify({ vid: visitorId, analytics: decided(scopes.analytics),
+      advertising: decided(scopes.advertising), ts: timestamp });
+    consents = consents.filter(item => item.vid !== visitorId);
+    consents.push({ body, at: timestamp, vid: visitorId });
+    void flushConsents().catch(report);
+    return true;
   }
 
   function enqueueHandoff(body: Record<string, unknown> & { vid: string }, revoke: boolean, at: number): boolean {
@@ -273,14 +316,17 @@ export function createInternalClient(options: ClientOptions) {
     if (!vid || (!email?.includes('@') && !externalId)) return Promise.reject(new TypeError('A visitor/session ID and valid email or external_id are required'));
     const body = JSON.stringify({ vid, email, external_id: externalId, ts: context.timestamp ?? Date.now() });
     if (bytes(body) > 30000) return Promise.reject(new TypeError('Identity payload is too large'));
-    const pending = send(path.identify, body, generation);
+    // Consent goes first so the collector can attach it to the identified person.
+    const version = generation;
+    const pending = (consentActive ?? Promise.resolve()).catch(() => {}).then(() => send(path.identify, body, version));
     identities.add(pending);
     void pending.then(() => identities.delete(pending), () => identities.delete(pending));
     return pending;
   }
 
   const client: AnalyticsClient = {
-    track, page: (context, props) => track('page_view', props, context), identify, captureAttribution, revokeAttribution, flush,
+    track, page: (context, props) => track('page_view', props, context), identify, captureAttribution, revokeAttribution,
+    recordConsent, flush,
     async shutdown() {
       stopped = true;
       cancelTimer();
@@ -301,6 +347,7 @@ export function createInternalClient(options: ClientOptions) {
     },
     beacon(sendBeacon: (url: string, body: string) => boolean) {
       void flushHandoffs().catch(() => report(new Error('Attribution delivery failed')));
+      if (consents.length) void flushConsents().catch(report);
       cancelTimer();
       // Events behind an in-flight keepalive request are still beaconed; that request owns its own batch.
       const offset = active ? inFlight : 0;
