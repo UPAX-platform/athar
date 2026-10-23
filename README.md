@@ -9,7 +9,9 @@ with Fetch, Web Crypto, and ES2022 support are required.
 npm install @upax/athar
 ```
 
-Supply the public site token and collector base URL from your analytics setup.
+Supply the public site token and your tenant's public origin
+(`https://<label>.upax.io`) from your analytics setup. A branded host or a
+first-party reverse-proxy prefix (`https://example.com/x`) works the same way.
 The SDK has no default collector address and contains no administrative API.
 A site token is public configuration, not a secret or an authentication credential.
 
@@ -22,7 +24,7 @@ import { createClient } from '@upax/athar';
 
 const analytics = createClient({
   site: 'YOUR_PUBLIC_SITE_TOKEN',
-  host: 'https://analytics.example.com',
+  host: 'https://acme.upax.io',
 });
 analytics.track('signup', { plan: 'pro' });
 ```
@@ -43,7 +45,7 @@ import { createBrowserClient } from '@upax/athar/browser';
 
 const analytics = createBrowserClient({
   site: 'YOUR_PUBLIC_SITE_TOKEN',
-  host: 'https://analytics.example.com',
+  host: 'https://acme.upax.io',
 });
 analytics.start();
 analytics.track('signup', { plan: 'pro' });
@@ -116,7 +118,7 @@ import { AtharProvider, useAthar } from '@upax/athar/react';
 
 const analytics = createBrowserClient({
   site: 'YOUR_PUBLIC_SITE_TOKEN',
-  host: 'https://analytics.example.com',
+  host: 'https://acme.upax.io',
 });
 
 function SignupButton() {
@@ -165,7 +167,7 @@ import App from './App.vue';
 import router from './router';
 
 createApp(App).use(router).use(createAtharPlugin({
-  site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com',
+  site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io',
   router, // Optional: omit for plain Vue with generic SPA tracking.
 })).mount('#app');
 ```
@@ -185,7 +187,7 @@ import { routes } from './routes';
 
 bootstrapApplication(App, { providers: [
   provideRouter(routes),
-  provideAthar({ site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com' }),
+  provideAthar({ site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io' }),
 ] });
 ```
 
@@ -206,7 +208,7 @@ place this in `src/routes/+layout.svelte` (Svelte 5 syntax):
   // Plain Svelte: import from '@upax/athar/svelte' instead.
   import { provideAthar } from '@upax/athar/sveltekit';
   let { children } = $props();
-  provideAthar({ site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com' });
+  provideAthar({ site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io' });
 </script>
 
 {@render children()}
@@ -230,7 +232,7 @@ import { AtharNextProvider, createNextClient } from '@upax/athar/next';
 
 export function Analytics({ children }: { children: ReactNode }) {
   const [client] = useState(() => createNextClient({
-    site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com',
+    site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io',
   }));
   return <AtharNextProvider client={client}>{children}</AtharNextProvider>;
 }
@@ -250,7 +252,7 @@ Astro's ClientRouter. Avoid installing it separately in each island:
 <script>
   import { installAthar } from '@upax/athar/astro';
   const analytics = installAthar({
-    site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://analytics.example.com',
+    site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io',
   });
   if (import.meta.hot) import.meta.hot.dispose(() => analytics.dispose());
 </script>
@@ -337,7 +339,7 @@ points import `@upax/athar/browser`, so an application loads one browser client 
 
 | Core option | Default | Meaning |
 | --- | --- | --- |
-| `site`, `host` | Required | Public token and HTTP(S) collector base URL |
+| `site`, `host` | Required | Public site token and HTTP(S) public origin (may include a path prefix) |
 | `batchSize` | `10` | Events per request, maximum `25` |
 | `maxQueueSize` | `1000` | Maximum buffered + in-flight events |
 | `flushInterval` | `3000` | Milliseconds; `0` disables scheduled flushing |
@@ -399,10 +401,14 @@ This SDK is intended for best-effort analytics, not financial/audit records.
 
 ## Public protocol
 
-`POST <host>/v1/e` receives `{ site, events }`. Events contain `id`, `ts`, `name`,
+Every route is `<host>/athar/<site>/<member>`; the site token is the path's
+second segment and is not repeated in the body.
+
+`POST <host>/athar/<site>/ev` receives `{ events }`. Events contain `id`, `ts`, `name`,
 `props`, and optional `url`, `ref`, `sid`, `vid`, `utm`, `attribution`.
-`POST <host>/v1/id` receives `{ site, vid, email?, external_id?, ts }`.
-Both requests contain JSON with `Content-Type: text/plain` and omit cookies.
+`POST <host>/athar/<site>/id` receives `{ vid, email?, external_id?, ts }`.
+`POST <host>/athar/<site>/attr` receives consented click-ID handoffs and withdrawals.
+All requests contain JSON with `Content-Type: text/plain` and omit cookies.
 Browser origins must be allowed by the collector. Successful responses are 2xx.
 
 ## Development and releases
@@ -496,7 +502,7 @@ Only public parameter names, aliases, classes, and canonical names are generated
 
 After explicit `granted` consent, browser/framework clients capture the first
 unambiguous click-ID arrival observed in each session. The click ID and descriptors
-from that same URL go to `POST /v1/attribution`, never `/v1/e`. Unknown/denied
+from that same URL go to `POST <host>/athar/<site>/attr`, never `/ev`. Unknown/denied
 consent and DNT/GPC suppress capture. A grant reads the current URL; the SDK does
 not save pre-consent landing tokens for later capture.
 

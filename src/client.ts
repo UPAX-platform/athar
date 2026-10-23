@@ -31,7 +31,9 @@ export function createInternalClient(options: ClientOptions) {
   if (!['https:', 'http:'].includes(host.protocol) || host.username || host.password || host.search || host.hash) {
     throw new TypeError('host must be an HTTP(S) base URL without credentials, query, or fragment');
   }
-  const base = host.href.replace(/\/+$/, '');
+  // Every route is `/athar/{site_token}/{member}` beneath the base, so a path-prefix proxy works unchanged.
+  const base = `${host.href.replace(/\/+$/, '')}/athar/${encodeURIComponent(options.site)}`;
+  const path = { events: '/ev', identify: '/id', attribution: '/attr' } as const;
   const fetcher = options.fetch ?? globalThis.fetch?.bind(globalThis);
   if (!fetcher) throw new TypeError('A fetch implementation is required');
   const batchSize = integer(options.batchSize, 10, 1, 25);
@@ -72,18 +74,18 @@ export function createInternalClient(options: ClientOptions) {
   }
   function cancelTimer(): void { clearTimeout(timer); timer = undefined; }
 
-  async function send(path: string, body: string, version: number, revoke = false, stillAllowed = () => true): Promise<void> {
+  async function send(route: string, body: string, version: number, revoke = false, stillAllowed = () => true): Promise<void> {
     for (let attempt = 0; ; attempt++) {
       if (!stillAllowed() || (!revoke && version !== generation)) throw new Error('Delivery cancelled');
       const controller = new AbortController();
       if (!revoke) controllers.add(controller);
-      if (!revoke && path === '/v1/attribution') handoffControllers.add(controller);
+      if (!revoke && route === path.attribution) handoffControllers.add(controller);
       let retryable = true;
       let retryAfter = 0;
       let deadline: ReturnType<typeof setTimeout> | undefined;
       try {
         const response = await Promise.race([
-          fetcher!(base + path, {
+          fetcher!(base + route, {
             method: 'POST', body, headers: { 'Content-Type': 'text/plain' },
             credentials: 'omit', keepalive: true, signal: controller.signal,
           }),
@@ -110,7 +112,7 @@ export function createInternalClient(options: ClientOptions) {
       // Bound server-controlled delays so shutdown has a finite upper bound.
       const backoff = new AbortController();
       if (!revoke) controllers.add(backoff);
-      if (!revoke && path === '/v1/attribution') handoffControllers.add(backoff);
+      if (!revoke && route === path.attribution) handoffControllers.add(backoff);
       await new Promise<void>(resolve => {
         const delay = Math.min(60000, Math.max(retryAfter || 0, retryDelay * 2 ** attempt * (0.5 + Math.random())));
         const wakeup = setTimeout(resolve, delay);
@@ -124,7 +126,7 @@ export function createInternalClient(options: ClientOptions) {
   function batch(offset = 0): AnalyticsEvent[] {
     const result: AnalyticsEvent[] = [];
     for (const event of queue.slice(offset, offset + batchSize)) {
-      if (bytes(JSON.stringify({ site: options.site, events: [...result, event] })) > 30000) break;
+      if (bytes(JSON.stringify({ events: [...result, event] })) > 30000) break;
       result.push(event);
     }
     return result;
@@ -142,7 +144,7 @@ export function createInternalClient(options: ClientOptions) {
         const events = batch().slice(0, remaining);
         inFlight = events.length;
         try {
-          await send('/v1/e', JSON.stringify({ site: options.site, events }), version);
+          await send(path.events, JSON.stringify({ events }), version);
         } catch (error) {
           // A rejected batch would otherwise block every later event in the queue.
           if (version !== generation || !rejectedPayload(error)) throw error;
@@ -172,7 +174,7 @@ export function createInternalClient(options: ClientOptions) {
         const item = handoffs[0]!;
         currentHandoff = item;
         if (Date.now() - item.at < 24 * 60 * 60 * 1000) {
-          try { await send('/v1/attribution', item.body, version, item.revoke, () => handoffs.includes(item)); }
+          try { await send(path.attribution, item.body, version, item.revoke, () => handoffs.includes(item)); }
           catch { throw new Error('Attribution delivery failed'); }
         }
         if (handoffs[0] === item) { handoffs.shift(); handoffRemaining--; }
@@ -211,7 +213,7 @@ export function createInternalClient(options: ClientOptions) {
     if (!Number.isSafeInteger(at) || at <= Date.now() - 86400000 || at > Date.now() + 300000) return false;
     const values = clickAttribution(params);
     if (!values) return false;
-    return enqueueHandoff({ site: options.site, id: randomId(), consent: 'granted',
+    return enqueueHandoff({ id: randomId(), consent: 'granted',
       sid: context.sessionId, vid: context.visitorId, ts: at, params: values }, false, at);
   }
 
@@ -224,7 +226,7 @@ export function createInternalClient(options: ClientOptions) {
     }
     // No token is copied into the revocation request.
     const at = Date.now();
-    return enqueueHandoff({ site: options.site, id: randomId(), consent: 'denied', vid: visitorId, ts: at }, true, at);
+    return enqueueHandoff({ id: randomId(), consent: 'denied', vid: visitorId, ts: at }, true, at);
   }
 
   function track(name: string, props: Properties = {}, context: EventContext = {}): boolean {
@@ -269,9 +271,9 @@ export function createInternalClient(options: ClientOptions) {
     const email = identity.email?.trim();
     const externalId = identity.external_id?.trim();
     if (!vid || (!email?.includes('@') && !externalId)) return Promise.reject(new TypeError('A visitor/session ID and valid email or external_id are required'));
-    const body = JSON.stringify({ site: options.site, vid, email, external_id: externalId, ts: context.timestamp ?? Date.now() });
+    const body = JSON.stringify({ vid, email, external_id: externalId, ts: context.timestamp ?? Date.now() });
     if (bytes(body) > 30000) return Promise.reject(new TypeError('Identity payload is too large'));
-    const pending = send('/v1/id', body, generation);
+    const pending = send(path.identify, body, generation);
     identities.add(pending);
     void pending.then(() => identities.delete(pending), () => identities.delete(pending));
     return pending;
@@ -305,7 +307,7 @@ export function createInternalClient(options: ClientOptions) {
       while (queue.length > offset) {
         const events = batch(offset);
         let accepted = false;
-        try { accepted = sendBeacon(base + '/v1/e', JSON.stringify({ site: options.site, events })); } catch { /* Fall back to fetch. */ }
+        try { accepted = sendBeacon(base + path.events, JSON.stringify({ events })); } catch { /* Fall back to fetch. */ }
         if (!accepted) { if (!active) void flush().catch(report); return; }
         queue.splice(offset, events.length);
       }

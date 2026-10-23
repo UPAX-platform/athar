@@ -36,8 +36,9 @@ describe('client', () => {
       client.track('purchase', { amount: 30 }, { sessionId: 's-two' });
       await client.identify({ external_id: 'account-1' }, { visitorId: 'v-one' });
       await client.shutdown();
-      expect(received.map(item => item.path)).toEqual(['/v1/id', '/v1/e']);
-      expect(received[0]?.body).toMatchObject({ site: 'public-site-token', vid: 'v-one', external_id: 'account-1' });
+      expect(received.map(item => item.path)).toEqual(['/athar/public-site-token/id', '/athar/public-site-token/ev']);
+      expect(received[0]?.body).toMatchObject({ vid: 'v-one', external_id: 'account-1' });
+      expect(received[0]?.body).not.toHaveProperty('site');
       expect(received[1]?.body.events[0]).toMatchObject({ name: 'purchase', sid: 's-one', vid: 'v-one', ts: 1700000000000, props: { amount: 15 } });
       expect(received[1]?.body.events[1].vid).toBeUndefined();
       expect(received.every(item => item.contentType === 'text/plain')).toBe(true);
@@ -171,9 +172,18 @@ it('retries click handoffs with a stable request ID, and flush waits for acknowl
     { consent: 'granted', sessionId: 's1', visitorId: 'v1' })).toBe(true);
   await client.flush();
   expect(fetcher.mock.calls).toHaveLength(2);
-  expect(fetcher.mock.calls[0]![0]).toBe('https://collector.example/v1/attribution');
+  expect(fetcher.mock.calls[0]![0]).toBe('https://collector.example/athar/public-site-token/attr');
   expect(fetcher.mock.calls[0]![1].body).toBe(fetcher.mock.calls[1]![1].body);
   expect(hook).not.toHaveBeenCalled();
+  await client.shutdown();
+});
+
+it('keeps a reverse-proxy path prefix and encodes the site token as one path segment', async () => {
+  const fetcher = vi.fn().mockResolvedValue(ok());
+  const client = createClient(config({ fetch: fetcher, site: 'ast_a/b', host: 'https://example.com/x/' }));
+  client.track('purchase');
+  await client.flush();
+  expect(fetcher.mock.calls[0]![0]).toBe('https://example.com/x/athar/ast_a%2Fb/ev');
   await client.shutdown();
 });
 

@@ -42,9 +42,12 @@ export interface Identity {
 }
 
 export interface ClientOptions {
-  /** Public site token; never use an administrative credential. */
+  /** Public site token (`ast_…`); never use an administrative credential. Sent as a path segment. */
   site: string;
-  /** Collector base URL, explicitly supplied by the consumer. */
+  /**
+   * The tenant's public origin (`https://<label>.upax.io`), a branded host, or a
+   * first-party proxy prefix (`https://example.com/x`). Requests go to `<host>/athar/<site>/…`.
+   */
   host: string;
   fetch?: typeof globalThis.fetch;
   batchSize?: number;

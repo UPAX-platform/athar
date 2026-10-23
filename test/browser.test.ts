@@ -11,7 +11,7 @@ const create = (extra: Partial<BrowserOptions> = {}) => {
   clients.push(client);
   return client;
 };
-const events = () => fetcher.mock.calls.filter(call => String(call[0]).endsWith('/v1/e'))
+const events = () => fetcher.mock.calls.filter(call => String(call[0]).endsWith('/ev'))
   .flatMap(call => JSON.parse(call[1].body).events);
 
 beforeEach(() => {
@@ -82,7 +82,7 @@ describe('browser tracking', () => {
     await client.flush();
     expect(events()[1].sid).toBe(events()[0].sid);
     expect(events()[1].vid).toMatch(/^v-/);
-    expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/v1/id'))).toBe(true);
+    expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/id'))).toBe(true);
     client.track('queued-before-denial');
     client.setConsent('denied');
     expect(client.track('denied')).toBe(false);
@@ -109,7 +109,7 @@ describe('browser tracking', () => {
   });
 
   it('aborts in-flight deliveries when consent is revoked', async () => {
-    fetcher.mockImplementation((url, init) => String(url).endsWith('/v1/attribution') ? Promise.resolve(new Response(null, { status: 204 })) : new Promise((_resolve, reject) => {
+    fetcher.mockImplementation((url, init) => String(url).endsWith('/attr') ? Promise.resolve(new Response(null, { status: 204 })) : new Promise((_resolve, reject) => {
       init.signal.addEventListener('abort', () => reject(new Error('aborted')));
     }));
     const client = create({ consent: 'granted' });
@@ -121,7 +121,7 @@ describe('browser tracking', () => {
   });
 
   it('cancels a retry backoff promptly when consent is revoked', async () => {
-    fetcher.mockImplementation(url => Promise.resolve(new Response(null, { status: String(url).endsWith('/v1/attribution') ? 204 : 503 })));
+    fetcher.mockImplementation(url => Promise.resolve(new Response(null, { status: String(url).endsWith('/attr') ? 204 : 503 })));
     const client = create({ consent: 'granted', retryDelay: 60000 });
     client.track('retrying');
     const pending = client.flush();
@@ -129,7 +129,7 @@ describe('browser tracking', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     client.setConsent('denied');
     await rejected;
-    expect(fetcher.mock.calls.filter(call => String(call[0]).endsWith('/v1/e'))).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(call => String(call[0]).endsWith('/ev'))).toHaveLength(1);
   });
 
   it('honors DNT without creating persistent identifiers', () => {
@@ -233,10 +233,10 @@ it('hands off click IDs only after consent, once per session, outside analytics 
   const hook = vi.fn(event => event);
   const client = create({ beforeSend: hook });
   client.start(); await client.flush();
-  expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/v1/attribution'))).toBe(false);
+  expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/attr'))).toBe(false);
   client.setConsent('granted'); await client.flush();
   client.track('another'); await client.flush();
-  const handoffs = fetcher.mock.calls.filter(call => String(call[0]).endsWith('/v1/attribution'));
+  const handoffs = fetcher.mock.calls.filter(call => String(call[0]).endsWith('/attr'));
   expect(handoffs).toHaveLength(1);
   expect(JSON.parse(handoffs[0]![1].body)).toMatchObject({ consent: 'granted',
     params: { gclid: 'private-click', campaign_id: '123', placement: 'feed' } });
@@ -255,7 +255,7 @@ it('does not capture conflicting identifiers, including duplicate query keys', a
   client.start(); await client.flush();
   history.replaceState({}, '', '/?gclid=one&gclid=two');
   client.track('again'); await client.flush();
-  expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/v1/attribution'))).toBe(false);
+  expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/attr'))).toBe(false);
 });
 
 it('aborts pending click capture and sends a token-free withdrawal on reset', async () => {
@@ -263,7 +263,7 @@ it('aborts pending click capture and sends a token-free withdrawal on reset', as
   let captureSignal: AbortSignal | undefined;
   fetcher.mockImplementation((url, init) => {
     const body = JSON.parse(init.body);
-    if (String(url).endsWith('/v1/attribution') && body.consent === 'granted') {
+    if (String(url).endsWith('/attr') && body.consent === 'granted') {
       captureSignal = init.signal;
       return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))));
     }
@@ -294,8 +294,8 @@ it('aborts pending click capture and sends a token-free withdrawal on reset', as
   expect(first.vid).toMatch(/^v-/);
   expect(first.sid).toMatch(/^s-/);
   expect(events()[1]).toMatchObject({ vid: first.vid, sid: first.sid });
-  expect(JSON.parse(fetcher.mock.calls.find(call => call[0].endsWith('/v1/id'))![1].body).vid).toBe(first.vid);
-  expect(JSON.parse(fetcher.mock.calls.find(call => call[0].endsWith('/v1/attribution'))![1].body))
+  expect(JSON.parse(fetcher.mock.calls.find(call => call[0].endsWith('/id'))![1].body).vid).toBe(first.vid);
+  expect(JSON.parse(fetcher.mock.calls.find(call => call[0].endsWith('/attr'))![1].body))
     .toMatchObject({ vid: first.vid, sid: first.sid, params: { gclid: 'click-one' } });
   client.track('override', {}, { visitorId: 'custom-v', sessionId: 'custom-s',
     url: '/other?utm_source=url', referrer: 'https://ref.example/path', timestamp: 1700000000000,
@@ -307,7 +307,7 @@ it('aborts pending click capture and sends a token-free withdrawal on reset', as
     utm: { source: 'manual' }, attribution: { campaign_name: 'manual' } });
   (client as BrowserClient).setConsent('denied');
   await client.flush();
-  expect(fetcher.mock.calls.filter(call => call[0].endsWith('/v1/attribution'))
+  expect(fetcher.mock.calls.filter(call => call[0].endsWith('/attr'))
     .map(call => JSON.parse(call[1].body))).toContainEqual(expect.objectContaining({ vid: 'custom-v', consent: 'denied' }));
 });
 
