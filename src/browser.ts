@@ -1,9 +1,13 @@
 import { attributionFromURL, clickAttribution, clickId, hasClickId, queryAttribution, stripClickIds } from './attribution';
 import { bytes, createInternalClient, randomId } from './client';
-import type { AnalyticsClient, AttributionContext, ClientOptions, Consent, EventContext, Identity, Properties } from './types';
+import type { AnalyticsClient, AttributionContext, ClientOptions, Consent, ConsentScopes, EventContext, Identity, Properties } from './types';
+
+/** A consent decision: one state for every scope, or per scope (an omitted scope keeps its state). */
+export type ConsentChoice = Consent | Partial<ConsentScopes>;
 
 export interface BrowserOptions extends ClientOptions {
-  consent?: Consent;
+  /** The consent already known for this page view, for example from a consent management platform. */
+  consent?: ConsentChoice;
   autoPageviews?: boolean;
   /** Disable History API instrumentation when a framework owns navigation events. */
   historyTracking?: boolean;
@@ -37,7 +41,7 @@ export interface FormContext {
   [param: string]: string | undefined;
 }
 
-export interface BrowserClient extends Omit<AnalyticsClient, 'identify' | 'captureAttribution' | 'revokeAttribution'> {
+export interface BrowserClient extends Omit<AnalyticsClient, 'identify' | 'captureAttribution' | 'revokeAttribution' | 'recordConsent'> {
   /** Records a pageview only when the sanitized URL changes. Used by router adapters. */
   pageIfChanged(context?: EventContext, props?: Properties): boolean;
   /** Current automatic context for integrations. Does not queue an event or extend the session. */
@@ -48,8 +52,15 @@ export interface BrowserClient extends Omit<AnalyticsClient, 'identify' | 'captu
   identify(identity: Identity, context?: EventContext): Promise<boolean>;
   captureAttribution(params?: Record<string, string>, context?: AttributionContext): boolean;
   revokeAttribution(visitorId?: string): boolean;
-  setConsent(state: Consent): void;
+  /**
+   * Applies the visitor's decision. `analytics` governs collection and identifiers, `advertising`
+   * click-ID capture; a single state sets both. The decision is sent to the collector for the
+   * visitor, before any identify(), and kept with the person they are identified as.
+   */
+  setConsent(state: ConsentChoice): void;
+  /** The analytics state. */
   getConsent(): Consent;
+  getConsentScopes(): ConsentScopes;
   /** Installs listeners once. Safe to restart after stop (including React Strict Mode). */
   start(): void;
   stop(): void;
@@ -82,6 +93,14 @@ const state = ((globalThis as Record<symbol, unknown>)[Symbol.for('@upax/athar/s
 const visitorKey = '_athar_v';
 /** The platform tracker's consent key; form embeds read it before storing or sending a click ID. */
 const consentKey = '_athar_c';
+const consentStates: readonly Consent[] = ['unknown', 'granted', 'denied'];
+function consentScopes(choice: ConsentChoice, current: ConsentScopes): ConsentScopes {
+  const scopes = typeof choice === 'string' ? { analytics: choice, advertising: choice }
+    : { analytics: choice?.analytics ?? current.analytics, advertising: choice?.advertising ?? current.advertising };
+  if (!consentStates.includes(scopes.analytics) || !consentStates.includes(scopes.advertising) ||
+    (typeof choice !== 'string' && !choice?.analytics && !choice?.advertising)) throw new TypeError('Invalid consent state');
+  return scopes;
+}
 const visitorCookieDays = 390;
 /** Latest-touch campaign lifetime. */
 const campaignLifetime = 90 * 24 * 60 * 60 * 1000;
@@ -133,7 +152,12 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
   let seenRevision = shared.revision;
   const sessionTimeout = options.sessionTimeout ?? 30 * 60 * 1000;
   if (!Number.isFinite(sessionTimeout) || sessionTimeout <= 0) throw new TypeError('sessionTimeout must be positive');
-  let consent: Consent = options.consent ?? 'unknown';
+  const initial = options.consent === undefined ? undefined
+    : consentScopes(options.consent, { analytics: 'unknown', advertising: 'unknown' });
+  /** The analytics scope: collection, identifiers and identify(). */
+  let consent: Consent = initial?.analytics ?? 'unknown';
+  /** The advertising scope: click-ID capture. */
+  let advertising: Consent = initial?.advertising ?? 'unknown';
   let loaded = false;
   let enabled = true;
   let terminated = false;
@@ -212,7 +236,20 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     if (options.consent === undefined) {
       const saved = storage('localStorage', 'consent');
       if (saved === 'granted' || saved === 'denied') consent = saved;
+      const ads = storage('localStorage', 'advertising');
+      if (ads === 'granted' || ads === 'denied') advertising = ads;
     }
+  }
+  /**
+   * Sends the current decision for a visitor to the collector, once per change: the last
+   * decision sent is remembered, so a page load that only restates it sends nothing.
+   */
+  function publishConsent(vid: string | undefined): void {
+    if (!vid) return;
+    const scopes = { analytics: consent, advertising };
+    const mark = JSON.stringify({ vid, ...scopes });
+    if (storage('localStorage', 'consent-sent') === mark) return;
+    if (core.recordConsent(scopes, vid)) storage('localStorage', 'consent-sent', mark);
   }
   /** Publishes a known decision for other scripts on the origin; storing a preference needs no consent. */
   function shareConsent(): void {
@@ -225,8 +262,12 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     loaded = false; // Read the new preference without writing a storage-event loop.
     const saved = storage('localStorage', 'consent');
     consent = saved === 'granted' || saved === 'denied' ? saved : 'unknown';
+    const ads = storage('localStorage', 'advertising');
+    advertising = ads === 'granted' || ads === 'denied' ? ads : 'unknown';
     loaded = true;
+    // The tab that made the decision sent it to the collector.
     if (consent !== 'granted') { internal.discard(); revokeCurrent(); clearIdentity(); }
+    else if (advertising !== 'granted') revokeCurrent();
   }
   let observingIdentity = false;
   function observeIdentity(): void {
@@ -348,7 +389,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     } catch (error) { internal.report(error); return false; }
   }
   function captureCurrent(raw?: string, ctx?: EventContext, supplied?: Record<string, string>): boolean {
-    if (!allowed() || consent !== 'granted') return false;
+    if (!allowed() || consent !== 'granted' || advertising !== 'granted') return false;
     const values = clickAttribution(supplied ?? queryAttribution(new URL(raw ?? w!.location.href, w!.location.href).href));
     if (!values) return false;
     ctx ??= context();
@@ -421,7 +462,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       Object.assign(form, loadCampaign()?.values);
       if (ctx.visitorId) form.visitor_id = ctx.visitorId;
       // A click ID is never stored by the SDK; only the current consented arrival can supply one.
-      const click = consent === 'granted' ? clickId(queryAttribution(w.location.href)) : undefined;
+      const click = consent === 'granted' && advertising === 'granted' ? clickId(queryAttribution(w.location.href)) : undefined;
       if (click) form[click.key] = click.value;
     } catch (error) { internal.report(error); }
     return form;
@@ -434,7 +475,7 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       try { return context(override, false); } catch (error) { internal.report(error); return undefined; }
     },
     getFormContext: formContext,
-    captureAttribution: (params, override) => allowed() && consent === 'granted'
+    captureAttribution: (params, override) => allowed() && consent === 'granted' && advertising === 'granted'
       ? captureCurrent(undefined, context(override), params) : false,
     revokeAttribution: revokeCurrent,
     page: (override, props) => track('page_view', props ?? { title: w?.document.title ?? '' }, override),
@@ -447,19 +488,31 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     },
     flush: () => { syncIdentity(); return core.flush(); },
     async shutdown() { syncIdentity(); client.stop(); terminated = true; w?.removeEventListener('storage', crossTabConsent); shared!.listeners.delete(syncIdentity); await core.shutdown(); },
-    setConsent(next) {
-      if (!['unknown', 'granted', 'denied'].includes(next)) throw new TypeError('Invalid consent state');
-      consent = next; loaded = true;
-      if (next === 'unknown') storage('localStorage', 'consent', null);
-      else storage('localStorage', 'consent', next);
+    setConsent(choice) {
+      syncIdentity(); loadConsent();
+      const scopes = consentScopes(choice, { analytics: consent, advertising });
+      const next = scopes.analytics;
+      // A withdrawal is sent for the visitors it ends, before their identifiers are cleared.
+      const ending = next === 'granted' ? [] : [...new Set([...visitors, visitor ?? storedVisitor()])];
+      consent = next; advertising = scopes.advertising; loaded = true;
+      for (const [name, state] of [['consent', next], ['advertising', advertising]] as const) {
+        storage('localStorage', name, state === 'unknown' ? null : state);
+      }
       shareConsent();
-      if (next !== 'granted') { internal.discard(); revokeCurrent(); clearIdentity(); }
+      if (next !== 'granted') {
+        for (const vid of ending) publishConsent(vid);
+        internal.discard(); revokeCurrent(); clearIdentity();
+      } else {
+        if (advertising !== 'granted') revokeCurrent();
+        if (allowed()) publishConsent(context({}, false).visitorId);
+      }
       // The current page was already recorded unless collection was denied.
       if (next === 'denied') { lastPage = undefined; previousPage = undefined; }
       if (running && options.autoPageviews !== false && next !== 'denied') autoPage();
       else if (running && next === 'granted') captureCurrent();
     },
     getConsent() { syncIdentity(); loadConsent(); return consent; },
+    getConsentScopes() { syncIdentity(); loadConsent(); return { analytics: consent, advertising }; },
     setEnabled(value) {
       enabled = value;
       if (!value) internal.discard();
@@ -476,7 +529,11 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       if (consent !== 'unknown') shareConsent();
       // The visitor key is shared with other trackers on this origin; only an explicit denial removes it.
       if (consent === 'denied' && (visitor || storedVisitor())) {
+        publishConsent(visitor ?? storedVisitor());
         internal.discard(); revokeCurrent(); clearIdentity();
+      } else if (consent === 'granted' && allowed()) {
+        // A decision supplied at construction reaches the collector once.
+        publishConsent(context({}, false).visitorId);
       }
       const removeHistory = options.autoPageviews === false || options.historyTracking === false ? () => {} : subscribeHistory(w, autoPage);
       const visibility = () => { if (w.document.visibilityState === 'hidden') lifecycleFlush(); };

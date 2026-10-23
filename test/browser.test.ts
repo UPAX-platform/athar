@@ -104,12 +104,13 @@ describe('browser tracking', () => {
     window.dispatchEvent(new StorageEvent('storage', { key: '_athar:public-site:consent', newValue: 'denied' }));
     await client.flush();
     expect(events()).toHaveLength(0);
-    expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toMatchObject({ consent: 'denied' });
+    expect(JSON.parse(fetcher.mock.calls.find(call => String(call[0]).endsWith('/v1/attribution'))![1].body))
+      .toMatchObject({ consent: 'denied' });
     expect(client.getConsent()).toBe('denied');
   });
 
   it('aborts in-flight deliveries when consent is revoked', async () => {
-    fetcher.mockImplementation((url, init) => String(url).endsWith('/v1/attribution') ? Promise.resolve(new Response(null, { status: 204 })) : new Promise((_resolve, reject) => {
+    fetcher.mockImplementation((url, init) => /\/v1\/(attribution|consent)$/.test(String(url)) ? Promise.resolve(new Response(null, { status: 204 })) : new Promise((_resolve, reject) => {
       init.signal.addEventListener('abort', () => reject(new Error('aborted')));
     }));
     const client = create({ consent: 'granted' });
@@ -121,7 +122,7 @@ describe('browser tracking', () => {
   });
 
   it('cancels a retry backoff promptly when consent is revoked', async () => {
-    fetcher.mockImplementation(url => Promise.resolve(new Response(null, { status: String(url).endsWith('/v1/attribution') ? 204 : 503 })));
+    fetcher.mockImplementation(url => Promise.resolve(new Response(null, { status: /\/v1\/(attribution|consent)$/.test(String(url)) ? 204 : 503 })));
     const client = create({ consent: 'granted', retryDelay: 60000 });
     client.track('retrying');
     const pending = client.flush();
@@ -538,4 +539,85 @@ it('shares a known consent decision through _athar_c for form embeds', () => {
   expect(localStorage.getItem('_athar_c')).toBeNull();
   create({ consent: 'granted' }).start();
   expect(localStorage.getItem('_athar_c')).toBe('granted');
+});
+
+describe('consent to the collector', () => {
+  const consents = () => fetcher.mock.calls.filter(call => String(call[0]).endsWith('/v1/consent'))
+    .map(call => JSON.parse(call[1].body));
+
+  it('sends a grant for the new visitor before identify, and once per decision', async () => {
+    const order: string[] = [];
+    fetcher.mockImplementation(async url => { order.push(new URL(String(url)).pathname); return new Response(null, { status: 204 }); });
+    const client = create({ autoPageviews: false });
+    client.start();
+    expect(consents()).toHaveLength(0);
+    client.setConsent('granted');
+    await client.identify({ email: 'ada@example.com' });
+    await client.flush();
+    const vid = localStorage.getItem('_athar_v');
+    expect(vid).toMatch(/^v-/);
+    expect(consents()).toEqual([{ site: 'public-site', vid, analytics: 'granted', advertising: 'granted', ts: expect.any(Number) }]);
+    expect(order.indexOf('/v1/consent')).toBeLessThan(order.indexOf('/v1/id'));
+    client.setConsent('granted'); await client.flush();
+    expect(consents()).toHaveLength(1);
+    // A later page load restating the decision sends nothing.
+    const again = create({ consent: 'granted', autoPageviews: false });
+    again.start(); await again.flush();
+    expect(consents()).toHaveLength(1);
+  });
+
+  it('sends a consent supplied at construction once', async () => {
+    const client = create({ consent: { analytics: 'granted', advertising: 'denied' }, autoPageviews: false });
+    client.start(); await client.flush();
+    expect(consents()).toEqual([expect.objectContaining({ analytics: 'granted', advertising: 'denied' })]);
+    expect(client.getConsentScopes()).toEqual({ analytics: 'granted', advertising: 'denied' });
+  });
+
+  it('keeps the visitor when only advertising is withdrawn, and stops click capture', async () => {
+    window.history.replaceState({}, '', '/?gclid=one');
+    const client = create({ consent: 'granted', autoPageviews: false });
+    client.start(); await client.flush();
+    const vid = localStorage.getItem('_athar_v');
+    client.setConsent({ advertising: 'denied' });
+    await client.flush();
+    expect(consents().at(-1)).toMatchObject({ vid, analytics: 'granted', advertising: 'denied' });
+    expect(localStorage.getItem('_athar_v')).toBe(vid);
+    expect(fetcher.mock.calls.filter(call => String(call[0]).endsWith('/v1/attribution'))
+      .map(call => JSON.parse(call[1].body).consent)).toEqual(['granted', 'denied']);
+    expect(client.track('still-measured')).toBe(true);
+    window.history.replaceState({}, '', '/?gclid=two');
+    expect(client.captureAttribution({ gclid: 'two' })).toBe(false);
+    expect(client.getFormContext().gclid).toBeUndefined();
+    // A reload keeps the advertising decision.
+    expect(create({ autoPageviews: false }).getConsentScopes()).toEqual({ analytics: 'granted', advertising: 'denied' });
+  });
+
+  it('sends a withdrawal for the visitor it ends, which the discard does not cancel', async () => {
+    const client = create({ consent: 'granted', autoPageviews: false });
+    client.start(); await client.flush();
+    const vid = localStorage.getItem('_athar_v');
+    client.setConsent('denied');
+    await client.flush();
+    expect(consents().at(-1)).toMatchObject({ vid, analytics: 'denied', advertising: 'denied' });
+    expect(localStorage.getItem('_athar_v')).toBeNull();
+    // Nobody left to attach a decision to: nothing more is sent.
+    client.setConsent('unknown'); await client.flush();
+    expect(consents()).toHaveLength(2);
+  });
+
+  it('sends nothing for a visitor who never had an identifier, or under Do Not Track', async () => {
+    const client = create({ autoPageviews: false });
+    client.start(); client.setConsent('denied'); await client.flush();
+    Object.defineProperty(window.navigator, 'doNotTrack', { configurable: true, get: () => '1' });
+    const dnt = create({ site: 'dnt-site', autoPageviews: false });
+    dnt.start(); dnt.setConsent('granted'); await dnt.flush();
+    expect(consents()).toHaveLength(0);
+  });
+
+  it('rejects an invalid decision', () => {
+    const client = create();
+    expect(() => client.setConsent('maybe' as never)).toThrow(TypeError);
+    expect(() => client.setConsent({})).toThrow(TypeError);
+    expect(() => client.setConsent({ advertising: 'yes' as never })).toThrow(TypeError);
+  });
 });

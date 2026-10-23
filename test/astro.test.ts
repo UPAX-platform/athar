@@ -31,6 +31,7 @@ it('respects manual pageviews and consent changes with Astro routing', async () 
   manual.dispose(); await manual.client.shutdown();
   const analytics = installAthar({ site: 'astro-consent', host: 'https://collector.example', fetch: fetcher, consent: 'denied', flushInterval: 0 });
   analytics.client.setConsent('granted'); await analytics.client.flush();
-  expect(fetcher.mock.calls.flatMap(call => JSON.parse(call[1].body).events)).toHaveLength(1);
+  expect(fetcher.mock.calls.filter(call => String(call[0]).endsWith('/v1/e'))
+    .flatMap(call => JSON.parse(call[1].body).events)).toHaveLength(1);
   analytics.dispose(); await analytics.client.shutdown();
 });

@@ -311,6 +311,24 @@ origin. Consent withdrawal clears pending data and aborts active requests;
 requests already received cannot be recalled. Granting consent continues the
 current session and does not record the current page again.
 
+Consent has two scopes. `analytics` is the state in the table above; `advertising`
+governs click-ID capture (and the click ID in `getFormContext()`). A single state
+sets both, or set them separately:
+`setConsent({ analytics: 'granted', advertising: 'denied' })`. An omitted scope
+keeps its state, and `getConsentScopes()` reads both. Withdrawing only
+`advertising` keeps the visitor ID and withdraws any captured click.
+
+Every decision is also sent to the collector (`POST <host>/v1/consent`,
+`{ site, vid, analytics?, advertising?, ts }`, an undecided scope omitted) for
+the visitor it applies to: on a grant, the new visitor ID; on a withdrawal, the
+visitor IDs it ends. The collector keeps the latest decision and gives it to the
+person the visitor is identified as, so a decision is delivered before any later
+`identify()`, retried like a click handoff, and not cancelled by the withdrawal's
+own discard. A decision is sent once: a page load that restates it (including a
+constructor `consent`) sends nothing. A visitor without an ID — never granted, or
+under DNT/GPC — has nothing to send. Server code calls
+`recordConsent(scopes, visitorId, timestamp?)` on the core client.
+
 Do Not Track and Global Privacy Control suppress collection by default. Query
 strings, fragments, URL credentials, and referrer query strings are removed.
 The five standard UTM values and allowlisted campaign descriptors are collected separately. Paths, page titles, UTM
@@ -365,7 +383,7 @@ accepts optional parameters and context. Without arguments, browser attribution
 capture uses the current URL and generated identity. Server attribution capture
 requires explicit parameters and consent/identity context.
 The browser adds `start`, `stop`, `reset`, `setConsent`, `getConsent`,
-`setEnabled`, `getContext`, and `getFormContext`. Browser `identify` resolves
+`getConsentScopes`, `setEnabled`, `getContext`, and `getFormContext`. Browser `identify` resolves
 `true` on acknowledgement and `false` when consent, DNT, GPC, or a disabled
 client prevents it. Use `createBrowserClient` when these browser controls are needed.
 

@@ -2,6 +2,12 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export type Properties = Record<string, Json>;
 export type Consent = 'unknown' | 'granted' | 'denied';
 
+/** Tracking consent per scope: `analytics` for measurement, `advertising` for ad attribution. */
+export interface ConsentScopes {
+  analytics: Consent;
+  advertising: Consent;
+}
+
 /** Public collector event contract. Timestamps are Unix milliseconds. */
 export interface AnalyticsEvent {
   id: string;
@@ -68,6 +74,12 @@ export interface AnalyticsClient {
   captureAttribution(params?: Record<string, string>, context?: AttributionContext): boolean;
   /** Revoke this visitor's pending click-ID handoffs. Rotate visitor ID before regranting. */
   revokeAttribution(visitorId?: string): boolean;
+  /**
+   * Send the visitor's tracking consent to the collector, where it is kept for the person the
+   * visitor is later identified as. Only the latest decision per visitor is delivered;
+   * identify() waits for it, and flush() waits for acknowledgement.
+   */
+  recordConsent(scopes: ConsentScopes, visitorId: string, timestamp?: number): boolean;
   flush(): Promise<void>;
   /** Stops accepting events and drains the existing queue. May be retried. */
   shutdown(): Promise<void>;

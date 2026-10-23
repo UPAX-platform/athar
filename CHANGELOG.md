@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Send consent to the collector: `setConsent()` posts the visitor's decision per scope (`analytics`, `advertising`) to `POST /v1/consent` for the visitor it applies to, once per change and before any later `identify()`, so the collector can give it to the person the visitor is identified as. `setConsent()` and the `consent` option accept `{ analytics?, advertising? }`; `advertising` alone governs click-ID capture. Add `getConsentScopes()` and the core `recordConsent()`. An event named `consent*` is an ordinary event.
 - Add `getFormContext()`: the flat public-form context, with campaign tags and descriptors kept across navigation (90 days with consent, the tab without), the session's external referrer, and a consented click ID from the current URL. Click IDs are still never stored.
 - Share a granted or denied consent decision through `localStorage._athar_c` and include `consent` in `getFormContext()`, so form embeds and endpoints keep click IDs only with consent.
 - Store the consented visitor ID in `localStorage._athar_v` and the `_athar_v` cookie, matching the platform tracker and form embeds. Unknown consent no longer removes the shared ID.

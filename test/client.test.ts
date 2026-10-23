@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { createClient } from '../src/index';
+import { createClient as createCoreClient } from '../src/client';
 import type { ClientOptions } from '../src/types';
 import { createBrowserClient } from '../src/browser';
 
@@ -255,4 +256,58 @@ it('narrows the main entry point client and exposes an explicit server client', 
   const server = createServerClient(config({ fetch: vi.fn() }));
   expect(isBrowserClient(server)).toBe(false);
   expect(isBrowserClient(createBrowserClient(config({ fetch: vi.fn() })))).toBe(true);
+});
+
+it('delivers only the latest consent per visitor, retries it, and omits undecided scopes', async () => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response(null, { status: 503 }))
+    .mockResolvedValue(ok());
+  const client = createCoreClient(config({ fetch: fetcher }));
+  const now = Date.now();
+  expect(client.recordConsent({ analytics: 'granted', advertising: 'unknown' }, 'v1', now)).toBe(true);
+  expect(client.recordConsent({ analytics: 'granted', advertising: 'denied' }, 'v2', now)).toBe(true);
+  await client.flush();
+  const bodies = fetcher.mock.calls.map(call => [String(call[0]), JSON.parse(call[1].body)]);
+  expect(bodies[0]![0]).toBe('https://collector.example/v1/consent');
+  expect(bodies[0]![1]).toEqual({ site: 'public-site-token', vid: 'v1', analytics: 'granted', ts: now });
+  expect(bodies[1]![1]).toEqual(bodies[0]![1]); // the retry is the same request
+  expect(bodies[2]![1]).toMatchObject({ vid: 'v2', analytics: 'granted', advertising: 'denied' });
+  expect(fetcher.mock.calls[0]![1]).toMatchObject({ credentials: 'omit', headers: { 'Content-Type': 'text/plain' } });
+  await client.shutdown();
+});
+
+it('lets a newer consent supersede one not yet delivered, and identify wait for it', async () => {
+  let release: () => void = () => {};
+  const fetcher = vi.fn().mockImplementation((url: string) => url.endsWith('/v1/consent') && !fetcher.mock.calls.slice(1).length
+    ? new Promise(resolve => { release = () => resolve(ok()); }) : Promise.resolve(ok()));
+  const client = createCoreClient(config({ fetch: fetcher }));
+  const now = Date.now();
+  client.recordConsent({ analytics: 'granted', advertising: 'granted' }, 'v1', now - 2);
+  client.recordConsent({ analytics: 'granted', advertising: 'denied' }, 'v2', now - 1);
+  client.recordConsent({ analytics: 'denied', advertising: 'denied' }, 'v2', now);
+  const identified = client.identify({ email: 'ada@example.com' }, { visitorId: 'v2' });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(fetcher.mock.calls.some(call => String(call[0]).endsWith('/v1/id'))).toBe(false);
+  release();
+  await identified; await client.flush();
+  const paths = fetcher.mock.calls.map(call => new URL(String(call[0])).pathname);
+  expect(paths).toEqual(['/v1/consent', '/v1/consent', '/v1/id']);
+  expect(JSON.parse(fetcher.mock.calls[1]![1].body)).toMatchObject({ vid: 'v2', analytics: 'denied' });
+  await client.shutdown();
+});
+
+it('refuses invalid consent and drops one the collector rejects', async () => {
+  const errors: Error[] = [];
+  const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 400 }));
+  const client = createCoreClient(config({ fetch: fetcher, onError: error => errors.push(error) }));
+  expect(client.recordConsent({ analytics: 'yes' as never, advertising: 'denied' }, 'v1')).toBe(false);
+  expect(client.recordConsent({ analytics: 'granted', advertising: 'denied' }, '')).toBe(false);
+  expect(client.recordConsent({ analytics: 'granted', advertising: 'denied' }, 'v1', Date.now() - 2 * 86400000)).toBe(false);
+  expect(client.recordConsent({ analytics: 'granted', advertising: 'denied' }, 'v1')).toBe(true);
+  await client.flush();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(errors).toHaveLength(1);
+  await client.flush();
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await client.shutdown();
 });
