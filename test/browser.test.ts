@@ -452,13 +452,15 @@ it('builds full form context after navigation without storing click IDs', async 
   const form = client.getFormContext();
   expect(form).toEqual({ page_url: 'http://localhost:3000/newsletter', page_title: 'Newsletter',
     referrer: 'https://search.example/results', visitor_id: client.getContext()!.visitorId, consent: 'granted',
+    web_consent: { analytics: 'granted', advertising: 'granted', at: expect.any(Number) },
     utm_source: 'google', utm_campaign: 'launch', campaign_id: 'c1' });
   expect(JSON.stringify({ ...localStorage, ...sessionStorage, cookie: document.cookie })).not.toContain('private-click');
   await client.flush();
   expect(events().filter(event => event.name === 'page_view')).toHaveLength(2);
   client.setConsent('denied');
   expect(client.getFormContext()).toEqual({ page_url: 'http://localhost:3000/newsletter', page_title: 'Newsletter',
-    referrer: 'http://localhost:3000/', consent: 'denied' });
+    referrer: 'http://localhost:3000/', consent: 'denied',
+    web_consent: { analytics: 'denied', advertising: 'denied', at: expect.any(Number) } });
   delete (document as unknown as Record<string, unknown>).referrer;
 });
 
@@ -545,6 +547,29 @@ describe('consent to the collector', () => {
   const consents = () => fetcher.mock.calls.filter(call => String(call[0]).endsWith('/opt'))
     .map(call => JSON.parse(call[1].body));
 
+  it('carries the decision it sends in the form context, and omits it until the visitor decides', async () => {
+    const client = create({ autoPageviews: false });
+    client.start();
+    expect(client.getFormContext()).not.toHaveProperty('web_consent');
+    client.setConsent({ analytics: 'granted' });
+    await client.flush();
+    const sent = consents().at(-1);
+    expect(sent).not.toHaveProperty('advertising');
+    expect(client.getFormContext().web_consent).toEqual({ analytics: 'granted', at: sent.ts });
+    // Restating the decision keeps its time; another tab reads the same decision.
+    client.setConsent({ analytics: 'granted' });
+    expect(client.getFormContext().web_consent).toEqual({ analytics: 'granted', at: sent.ts });
+    expect(create({ autoPageviews: false }).getFormContext().web_consent).toEqual({ analytics: 'granted', at: sent.ts });
+    await new Promise(resolve => setTimeout(resolve, 2));
+    client.setConsent({ advertising: 'denied' });
+    await client.flush();
+    const next = consents().at(-1);
+    expect(next.ts).toBeGreaterThan(sent.ts);
+    expect(client.getFormContext().web_consent).toEqual({ analytics: 'granted', advertising: 'denied', at: next.ts });
+    client.setConsent('unknown');
+    expect(client.getFormContext()).not.toHaveProperty('web_consent');
+    expect(localStorage.getItem('_athar:public-site:decision')).toBeNull();
+  });
 
   it('sends a grant for the new visitor before identify, and once per decision', async () => {
     const order: string[] = [];

@@ -30,15 +30,24 @@ export interface FormContext {
   referrer: string;
   /** Present only with granted consent. */
   visitor_id?: string;
-  /** `granted` or `denied` once known; a form endpoint stores a click ID only on `granted`. */
+  /** The analytics state once `granted` or `denied`; a form endpoint stores a click ID only on `granted`. */
   consent?: 'granted' | 'denied';
+  /** The visitor's latest decision per scope, as sent to the collector; absent until they decide. */
+  web_consent?: WebConsent;
   utm_source?: string;
   utm_medium?: string;
   utm_campaign?: string;
   utm_term?: string;
   utm_content?: string;
   /** Campaign descriptors from the latest arrival, and a consented click ID from this URL, keyed by URL parameter name. */
-  [param: string]: string | undefined;
+  [param: string]: string | WebConsent | undefined;
+}
+
+/** A visitor's tracking decision per scope; an undecided scope is omitted. `at` is Unix milliseconds. */
+export interface WebConsent {
+  analytics?: 'granted' | 'denied';
+  advertising?: 'granted' | 'denied';
+  at: number;
 }
 
 export interface BrowserClient extends Omit<AnalyticsClient, 'identify' | 'captureAttribution' | 'revokeAttribution' | 'recordConsent'> {
@@ -249,7 +258,32 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     const scopes = { analytics: consent, advertising };
     const mark = JSON.stringify({ vid, ...scopes });
     if (storage('localStorage', 'consent-sent') === mark) return;
-    if (core.recordConsent(scopes, vid)) storage('localStorage', 'consent-sent', mark);
+    // The collector accepts a decision made in the last day; an older one restated for a new visitor is sent as of now.
+    const at = decision()?.at ?? Date.now();
+    const ts = at > Date.now() - 23 * 60 * 60 * 1000 ? at : Date.now();
+    if (core.recordConsent(scopes, vid, ts)) storage('localStorage', 'consent-sent', mark);
+  }
+  /** The last decision made in this browser, in memory when storage is unavailable. */
+  let decided: { analytics: Consent; advertising: Consent; at: number } | undefined;
+  /**
+   * The visitor's current decision and when they made it: the stored time while the scopes are
+   * unchanged, a new one when they change. Undefined while neither scope is decided.
+   */
+  function decision(): WebConsent | undefined {
+    if (consent === 'unknown' && advertising === 'unknown') return undefined;
+    const current = (d: typeof decided) => !!d && d.analytics === consent && d.advertising === advertising &&
+      Number.isSafeInteger(d.at) && d.at > 0;
+    let saved: typeof decided;
+    try { saved = JSON.parse(storage('localStorage', 'decision') || 'null') ?? undefined; } catch { /* Corrupt: replaced below. */ }
+    if (current(saved)) decided = saved;
+    else if (!current(decided)) {
+      decided = { analytics: consent, advertising, at: Date.now() };
+      storage('localStorage', 'decision', JSON.stringify(decided));
+    }
+    const result: WebConsent = { at: decided!.at };
+    if (consent !== 'unknown') result.analytics = consent;
+    if (advertising !== 'unknown') result.advertising = advertising;
+    return result;
   }
   /** Publishes a known decision for other scripts on the origin; storing a preference needs no consent. */
   function shareConsent(): void {
@@ -456,6 +490,8 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       form.referrer = sanitize(w.document.referrer);
       const known = allowed();
       if (consent !== 'unknown') form.consent = consent;
+      const web = decision();
+      if (web) form.web_consent = web;
       if (!known) return form;
       const ctx = context({}, false);
       if (sessionReferrer) form.referrer = sessionReferrer;
@@ -498,6 +534,8 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       for (const [name, state] of [['consent', next], ['advertising', advertising]] as const) {
         storage('localStorage', name, state === 'unknown' ? null : state);
       }
+      if (next === 'unknown' && advertising === 'unknown') { decided = undefined; storage('localStorage', 'decision', null); }
+      else decision();
       shareConsent();
       if (next !== 'granted') {
         for (const vid of ending) publishConsent(vid);
