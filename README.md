@@ -92,22 +92,22 @@ await fetch(formEndpoint, {
 
 It contains `page_url` and `page_title` for this page, `referrer` (the session's
 external referrer when known), the latest campaign's `utm_*` tags and campaign
-descriptors keyed by URL parameter, `consent` (the analytics state) once it is
-`granted` or `denied`, `web_consent` once the visitor has decided, and with
-granted consent `visitor_id` plus a click ID present on the current URL.
-Form endpoints store a click ID only when `consent` is `granted`. `web_consent`
-is `{ analytics?, advertising?, at }`: the per-scope decision also sent to
+descriptors keyed by URL parameter, `web_consent` once the visitor has
+decided, and with granted consent `visitor_id` plus a click ID present on the
+current URL. Form endpoints store a click ID only when `web_consent.advertising`
+is `granted`. `web_consent` is `{ analytics?, advertising?, at }`: the per-scope decision also sent to
 `/athar/<site>/opt`, an undecided scope omitted, and `at` the Unix milliseconds
 of the visitor's last decision; the platform keeps it with the person who
 submits the form. A URL with any campaign tag or click ID is a
 new arrival and replaces the stored campaign, which then survives navigation for
 up to 90 days. Click IDs themselves are never stored by the SDK. Without
 consent the campaign is kept only for the tab; with denied consent, DNT, or GPC
-only the page fields (and the denied `consent` and `web_consent`) are returned. The visitor ID is
-stored in `localStorage._athar_v` and the `_athar_v` cookie, and a granted or
-denied decision in `localStorage._athar_c`: the keys read by the platform's
-tracker and form embed snippet, which stores and sends click IDs only after
-consent.
+only the page fields (and the denied `web_consent`) are returned. The visitor ID is
+stored in `localStorage._athar_v` and the `_athar_v` cookie, and the decision in
+`localStorage['_athar:<site>:decision']` as `{ analytics, advertising, at }`
+(each scope `granted`, `denied` or `unknown`): the keys read by the platform's
+form embed snippet, which sends the same `web_consent` and stores and sends
+click IDs only with advertising consent.
 
 ## React and Next.js
 

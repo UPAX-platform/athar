@@ -30,9 +30,7 @@ export interface FormContext {
   referrer: string;
   /** Present only with granted consent. */
   visitor_id?: string;
-  /** The analytics state once `granted` or `denied`; a form endpoint stores a click ID only on `granted`. */
-  consent?: 'granted' | 'denied';
-  /** The visitor's latest decision per scope, as sent to the collector; absent until they decide. */
+  /** The visitor's latest decision per scope, as sent to the collector; absent until they decide. A form endpoint stores a click ID only when `advertising` is `granted`. */
   web_consent?: WebConsent;
   utm_source?: string;
   utm_medium?: string;
@@ -100,8 +98,6 @@ const state = ((globalThis as Record<symbol, unknown>)[Symbol.for('@upax/athar/s
 
 /** The platform tracker and form embeds read the visitor ID from this key. */
 const visitorKey = '_athar_v';
-/** The platform tracker's consent key; form embeds read it before storing or sending a click ID. */
-const consentKey = '_athar_c';
 const consentStates: readonly Consent[] = ['unknown', 'granted', 'denied'];
 function consentScopes(choice: ConsentChoice, current: ConsentScopes): ConsentScopes {
   const scopes = typeof choice === 'string' ? { analytics: choice, advertising: choice }
@@ -263,7 +259,12 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     const ts = at > Date.now() - 23 * 60 * 60 * 1000 ? at : Date.now();
     if (core.recordConsent(scopes, vid, ts)) storage('localStorage', 'consent-sent', mark);
   }
-  /** The last decision made in this browser, in memory when storage is unavailable. */
+  /**
+   * The last decision made in this browser, in memory when storage is unavailable. It is stored as
+   * `localStorage['_athar:<site>:decision']` = `{ analytics, advertising, at }` (each scope `granted`,
+   * `denied` or `unknown`; `at` in Unix milliseconds), which the platform's form embed reads to send
+   * `web_consent` and to keep a click ID only with advertising consent.
+   */
   let decided: { analytics: Consent; advertising: Consent; at: number } | undefined;
   /**
    * The visitor's current decision and when they made it: the stored time while the scopes are
@@ -284,11 +285,6 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
     if (consent !== 'unknown') result.analytics = consent;
     if (advertising !== 'unknown') result.advertising = advertising;
     return result;
-  }
-  /** Publishes a known decision for other scripts on the origin; storing a preference needs no consent. */
-  function shareConsent(): void {
-    if (consent === 'unknown') raw('localStorage', consentKey, null);
-    else raw('localStorage', consentKey, consent);
   }
   function crossTabConsent(event: StorageEvent): void {
     if (event.key === key + 'revision') { syncIdentity(); return; }
@@ -489,7 +485,6 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       form.page_title = w.document.title;
       form.referrer = sanitize(w.document.referrer);
       const known = allowed();
-      if (consent !== 'unknown') form.consent = consent;
       const web = decision();
       if (web) form.web_consent = web;
       if (!known) return form;
@@ -536,7 +531,6 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       }
       if (next === 'unknown' && advertising === 'unknown') { decided = undefined; storage('localStorage', 'decision', null); }
       else decision();
-      shareConsent();
       if (next !== 'granted') {
         for (const vid of ending) publishConsent(vid);
         internal.discard(); revokeCurrent(); clearIdentity();
@@ -564,7 +558,8 @@ export function createBrowserClient(options: BrowserOptions): BrowserClient {
       if (!w.athar) w.athar = client;
       observeIdentity();
       syncIdentity(); loadConsent();
-      if (consent !== 'unknown') shareConsent();
+      // Stores a known decision for other scripts on the origin; storing a preference needs no consent.
+      decision();
       // The visitor key is shared with other trackers on this origin; only an explicit denial removes it.
       if (consent === 'denied' && (visitor || storedVisitor())) {
         publishConsent(visitor ?? storedVisitor());

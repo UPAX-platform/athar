@@ -451,7 +451,7 @@ it('builds full form context after navigation without storing click IDs', async 
   Object.defineProperty(document, 'referrer', { configurable: true, get: () => 'http://localhost:3000/' });
   const form = client.getFormContext();
   expect(form).toEqual({ page_url: 'http://localhost:3000/newsletter', page_title: 'Newsletter',
-    referrer: 'https://search.example/results', visitor_id: client.getContext()!.visitorId, consent: 'granted',
+    referrer: 'https://search.example/results', visitor_id: client.getContext()!.visitorId,
     web_consent: { analytics: 'granted', advertising: 'granted', at: expect.any(Number) },
     utm_source: 'google', utm_campaign: 'launch', campaign_id: 'c1' });
   expect(JSON.stringify({ ...localStorage, ...sessionStorage, cookie: document.cookie })).not.toContain('private-click');
@@ -459,7 +459,7 @@ it('builds full form context after navigation without storing click IDs', async 
   expect(events().filter(event => event.name === 'page_view')).toHaveLength(2);
   client.setConsent('denied');
   expect(client.getFormContext()).toEqual({ page_url: 'http://localhost:3000/newsletter', page_title: 'Newsletter',
-    referrer: 'http://localhost:3000/', consent: 'denied',
+    referrer: 'http://localhost:3000/',
     web_consent: { analytics: 'denied', advertising: 'denied', at: expect.any(Number) } });
   delete (document as unknown as Record<string, unknown>).referrer;
 });
@@ -529,18 +529,23 @@ it('shares document identity state between separately loaded SDK copies', async 
   expect(b.getContext()!.sessionId).not.toBe(before);
 });
 
-it('shares a known consent decision through _athar_c for form embeds', () => {
+it('stores the per-scope decision form embeds read, and no flat consent', () => {
+  const stored = () => JSON.parse(localStorage.getItem('_athar:public-site:decision') ?? 'null');
   const client = create(); client.start();
-  expect(localStorage.getItem('_athar_c')).toBeNull();
-  expect(client.getFormContext().consent).toBeUndefined();
-  client.setConsent('granted');
-  expect(localStorage.getItem('_athar_c')).toBe('granted');
+  expect(stored()).toBeNull();
+  expect(client.getFormContext()).not.toHaveProperty('consent');
+  client.setConsent({ advertising: 'granted' });
+  expect(stored()).toEqual({ analytics: 'unknown', advertising: 'granted', at: expect.any(Number) });
+  expect(client.getFormContext().web_consent).toEqual({ advertising: 'granted', at: stored().at });
   client.setConsent('denied');
-  expect(localStorage.getItem('_athar_c')).toBe('denied');
+  expect(stored()).toMatchObject({ analytics: 'denied', advertising: 'denied' });
+  expect(client.getFormContext()).not.toHaveProperty('consent');
   client.setConsent('unknown');
+  expect(stored()).toBeNull();
+  // A decision supplied at construction is stored on start, even when collection is not allowed.
+  create({ consent: 'granted', domains: ['elsewhere.example'] }).start();
+  expect(stored()).toMatchObject({ analytics: 'granted', advertising: 'granted' });
   expect(localStorage.getItem('_athar_c')).toBeNull();
-  create({ consent: 'granted' }).start();
-  expect(localStorage.getItem('_athar_c')).toBe('granted');
 });
 
 describe('consent to the collector', () => {
