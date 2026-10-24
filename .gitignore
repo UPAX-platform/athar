@@ -17,3 +17,6 @@ scripts/setup-demo.mjs
 scripts/serve-demo.mjs
 test/browser/
 playwright.config.ts
+
+# Local Claude Code config
+.claude/
