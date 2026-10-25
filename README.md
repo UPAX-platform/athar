@@ -453,14 +453,18 @@ Before the first release, confirm the package scope/name and MIT license, add
 the public source URL as `repository` in `package.json`, and configure your npm
 account to own the scope. The included GitHub workflow is available if you host
 the repository on GitHub. Configure `npm` as a protected GitHub environment and
-set an [npm trusted publisher](https://docs.npmjs.com/trusted-publishers/) matching
-the owner, repository, `publish.yml` workflow, and environment `npm`. For a new
-package, bootstrap the first publication with `npm publish --access public` from
+set a stage-only [npm trusted publisher](https://docs.npmjs.com/trusted-publishers/)
+matching the owner, repository, `publish.yml` workflow, and environment `npm`. For a
+new package, bootstrap the first publication with `npm publish --access public` from
 an authenticated maintainer account, then configure trusted publishing.
 
 For subsequent releases, update the version and changelog, commit, push a matching
 `vX.Y.Z` tag, then manually run the publish workflow with that tag as `release_ref`.
-The workflow verifies the tag/version, tests, builds, and publishes with provenance.
+The workflow verifies the tag/version, tests, builds, and
+[stages](https://docs.npmjs.com/staged-publishing) the release with provenance
+(`npm stage publish`, npm 11.15+). Nothing is installable until a maintainer
+approves it with 2FA, on npmjs.com under **Staged Packages** or with
+`npm stage list` and `npm stage approve <stage-id>`; CI credentials cannot approve.
 The workflow requires a public GitHub source repository for provenance. Other
 hosting services can run `npm ci && npm run check` and publish through npm's
 supported authentication flow. No registry token belongs in this repository.
