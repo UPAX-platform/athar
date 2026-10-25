@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1 — 2026-10-25
+
+- Releases are now staged (`npm stage publish`) by the Publish workflow and go live only after a maintainer approves them with 2FA. The README's release section documents the approval step.
+
 ## 0.1.0 — 2026-10-25
 
 First public release, published as `@upax-ai/athar`.
