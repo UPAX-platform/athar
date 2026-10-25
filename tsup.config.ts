@@ -10,7 +10,7 @@ export default defineConfig({
   clean: true,
   splitting: false,
   // Adapters import shared entries by package name so applications load one browser client module.
-  external: ['react', 'react/jsx-runtime', '@upax/athar/browser', '@upax/athar/react', '@upax/athar/svelte', 'vue', '@angular/core', '@angular/common',
+  external: ['react', 'react/jsx-runtime', '@upax-ai/athar/browser', '@upax-ai/athar/react', '@upax-ai/athar/svelte', 'vue', '@angular/core', '@angular/common',
     '@angular/router', 'svelte', '$app/navigation', 'next/navigation.js'],
   // Preserve the React Server Components boundary after bundling.
   esbuildPlugins: [{

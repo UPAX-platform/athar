@@ -92,7 +92,7 @@ interface WindowState {
   histories: WeakMap<Window, { subscribers: Set<Subscriber>; cleanup: () => void }>;
 }
 // Separate entry bundles, or ESM and CommonJS copies, must share one document state.
-const state = ((globalThis as Record<symbol, unknown>)[Symbol.for('@upax/athar/state')] ??= {
+const state = ((globalThis as Record<symbol, unknown>)[Symbol.for('@upax-ai/athar/state')] ??= {
   sites: new WeakMap(), revoked: new WeakMap(), histories: new WeakMap(),
 }) as WindowState;
 

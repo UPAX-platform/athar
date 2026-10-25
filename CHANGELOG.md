@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 — 2026-10-25
+
+First public release, published as `@upax-ai/athar`.
 
 - Target the tenant public-plane URL grammar: `host` is the tenant's public origin (`https://<label>.upax.io`, a branded host, or a proxy prefix), and requests go to `/athar/<site>/ev`, `/athar/<site>/id`, and `/athar/<site>/attr` instead of `/v1/e`, `/v1/id`, and `/v1/attribution`. The site token moved from the request body into the path.
 - Add `web_consent` to `getFormContext()`: `{ analytics?, advertising?, at }`, the visitor's per-scope decision as sent to `/athar/<site>/opt` and the Unix milliseconds of their last decision, omitted until they decide. Form endpoints admit a click ID only when `web_consent.advertising` is `granted`.
@@ -13,7 +15,7 @@
 - `getContext()` no longer extends the session.
 - Browser `identify()` resolves `true` on acknowledgement and `false` when consent or privacy settings prevent it.
 - Drop batches refused with 400/413 (reported as `CollectorError`) instead of blocking the queue; schedule backed-off retries after failed flushes; beacon events queued behind an in-flight request.
-- Framework entries import `@upax/athar/browser` instead of bundling their own copy (about 1 KB each), and document state is shared between SDK copies.
+- Framework entries import `@upax-ai/athar/browser` instead of bundling their own copy (about 1 KB each), and document state is shared between SDK copies.
 - Add `AtharClient`, `isBrowserClient`, and `createServerClient`.
 
 - Expose consent-aware browser `getContext()` for form integrations and bind persisted visitor IDs to reset revisions.

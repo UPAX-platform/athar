@@ -1,5 +1,5 @@
 {
-  "name": "@upax/athar",
+  "name": "@upax-ai/athar",
   "version": "0.1.0",
   "description": "Privacy-conscious analytics SDK for browsers, Node.js, and popular frontend frameworks",
   "license": "MIT",

@@ -3,5 +3,5 @@ import { fileURLToPath } from 'node:url';
 
 export default {
   plugins: [sveltekit()],
-  resolve: { alias: { '@upax/athar/sveltekit': fileURLToPath(new URL('../../../dist/sveltekit.js', import.meta.url)) } },
+  resolve: { alias: { '@upax-ai/athar/sveltekit': fileURLToPath(new URL('../../../dist/sveltekit.js', import.meta.url)) } },
 };

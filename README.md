@@ -6,7 +6,7 @@ bindings. Node.js 22+ and modern browsers
 with Fetch, Web Crypto, and ES2022 support are required.
 
 ```sh
-npm install @upax/athar
+npm install @upax-ai/athar
 ```
 
 Supply the public site token and your tenant's public origin
@@ -20,7 +20,7 @@ A site token is public configuration, not a secret or an authentication credenti
 The main `createClient` export detects the browser and starts automatic collection:
 
 ```ts
-import { createClient } from '@upax/athar';
+import { createClient } from '@upax-ai/athar';
 
 const analytics = createClient({
   site: 'YOUR_PUBLIC_SITE_TOKEN',
@@ -41,7 +41,7 @@ Use `createBrowserClient` for explicit lifecycle and consent controls (including
 framework providers, which start the client themselves):
 
 ```ts
-import { createBrowserClient } from '@upax/athar/browser';
+import { createBrowserClient } from '@upax-ai/athar/browser';
 
 const analytics = createBrowserClient({
   site: 'YOUR_PUBLIC_SITE_TOKEN',
@@ -118,8 +118,8 @@ peer dependency, needed only for the `/react` entry point.
 ```tsx
 'use client';
 
-import { createBrowserClient } from '@upax/athar/browser';
-import { AtharProvider, useAthar } from '@upax/athar/react';
+import { createBrowserClient } from '@upax-ai/athar/browser';
+import { AtharProvider, useAthar } from '@upax-ai/athar/react';
 
 const analytics = createBrowserClient({
   site: 'YOUR_PUBLIC_SITE_TOKEN',
@@ -151,12 +151,12 @@ disables integration-owned pageviews. Manual `page()` always records a view;
 
 | Import | Integration | Framework peer |
 | --- | --- | --- |
-| `@upax/athar/vue` | Plugin, composable, optional Vue Router hooks | Vue 3.5+ |
-| `@upax/athar/angular` | Application provider, injection helper, Router events | Angular 19–22 core/common/router |
-| `@upax/athar/svelte` | Context and mount/unmount lifecycle | Svelte 4–5 |
-| `@upax/athar/sveltekit` | Svelte context and `afterNavigate` | SvelteKit 2–3 and its Svelte peer |
-| `@upax/athar/next` | App Router provider and shared React context | Next.js 14–16 and its React peer |
-| `@upax/athar/astro` | Client installation and page-load listener | No additional SDK peer |
+| `@upax-ai/athar/vue` | Plugin, composable, optional Vue Router hooks | Vue 3.5+ |
+| `@upax-ai/athar/angular` | Application provider, injection helper, Router events | Angular 19–22 core/common/router |
+| `@upax-ai/athar/svelte` | Context and mount/unmount lifecycle | Svelte 4–5 |
+| `@upax-ai/athar/sveltekit` | Svelte context and `afterNavigate` | SvelteKit 2–3 and its Svelte peer |
+| `@upax-ai/athar/next` | App Router provider and shared React context | Next.js 14–16 and its React peer |
+| `@upax-ai/athar/astro` | Client installation and page-load listener | No additional SDK peer |
 
 Tests currently use Vue 3.5, Angular 22, Svelte 5, SvelteKit 3, and Next.js 16.
 Each framework's own runtime and TypeScript requirements also apply. Every entry
@@ -167,7 +167,7 @@ global declaration, or TypeScript adapter setup file is needed.
 
 ```ts
 import { createApp } from 'vue';
-import { createAtharPlugin } from '@upax/athar/vue';
+import { createAtharPlugin } from '@upax-ai/athar/vue';
 import App from './App.vue';
 import router from './router';
 
@@ -177,7 +177,7 @@ createApp(App).use(router).use(createAtharPlugin({
 })).mount('#app');
 ```
 
-In component setup, import `useAthar` from `@upax/athar/vue`, then call
+In component setup, import `useAthar` from `@upax-ai/athar/vue`, then call
 `useAthar().track('signup')`. Each app receives its own client. Router tracking
 waits for readiness, ignores failed navigations, and cleans up on app unmount.
 
@@ -186,7 +186,7 @@ waits for readiness, ignores failed navigations, and cleans up on app unmount.
 ```ts
 import { bootstrapApplication } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
-import { provideAthar } from '@upax/athar/angular';
+import { provideAthar } from '@upax-ai/athar/angular';
 import { App } from './app';
 import { routes } from './routes';
 
@@ -196,7 +196,7 @@ bootstrapApplication(App, { providers: [
 ] });
 ```
 
-Import `injectAthar` from `@upax/athar/angular` and call it in a component's
+Import `injectAthar` from `@upax-ai/athar/angular` and call it in a component's
 injection context; `inject(ATHAR)` is also available. The provider waits for
 `NavigationEnd`, or records the initial view when no Router is registered.
 Server initialization installs no listeners. Injector destruction unsubscribes
@@ -210,8 +210,8 @@ place this in `src/routes/+layout.svelte` (Svelte 5 syntax):
 
 ```svelte
 <script lang="ts">
-  // Plain Svelte: import from '@upax/athar/svelte' instead.
-  import { provideAthar } from '@upax/athar/sveltekit';
+  // Plain Svelte: import from '@upax-ai/athar/svelte' instead.
+  import { provideAthar } from '@upax-ai/athar/sveltekit';
   let { children } = $props();
   provideAthar({ site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io' });
 </script>
@@ -233,7 +233,7 @@ Create a client component and wrap the root layout's children with it:
 ```tsx
 'use client';
 import { useState, type ReactNode } from 'react';
-import { AtharNextProvider, createNextClient } from '@upax/athar/next';
+import { AtharNextProvider, createNextClient } from '@upax-ai/athar/next';
 
 export function Analytics({ children }: { children: ReactNode }) {
   const [client] = useState(() => createNextClient({
@@ -255,7 +255,7 @@ Astro's ClientRouter. Avoid installing it separately in each island:
 
 ```astro
 <script>
-  import { installAthar } from '@upax/athar/astro';
+  import { installAthar } from '@upax-ai/athar/astro';
   const analytics = installAthar({
     site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io',
   });
@@ -270,7 +270,7 @@ flushes pending events; also use `client.shutdown()` when permanently retiring i
 ## Node.js and other server runtimes
 
 ```ts
-import { createClient } from '@upax/athar';
+import { createClient } from '@upax-ai/athar';
 
 const analytics = createClient({
   site: process.env.ANALYTICS_SITE!,
@@ -291,7 +291,7 @@ await analytics.flush();
 await analytics.shutdown();
 ```
 
-CommonJS: `const { createClient } = require('@upax/athar')`.
+CommonJS: `const { createClient } = require('@upax-ai/athar')`.
 Server code owns consent and supplies identity/session context explicitly. The
 SDK does not forward incoming cookies, request headers, user agents, or IPs.
 Events and identities sent by a backend are observed as backend requests.
@@ -356,7 +356,7 @@ clients in other tabs, including stopped clients with pending events.
 Clients also check the reset revision before manual tracking or explicit flushing. Same-document invalidation also works when
 storage is blocked, including between separately bundled copies of the SDK;
 cross-tab synchronization requires working browser storage. Framework entry
-points import `@upax/athar/browser`, so an application loads one browser client module.
+points import `@upax-ai/athar/browser`, so an application loads one browser client module.
 
 ## Options and API
 
