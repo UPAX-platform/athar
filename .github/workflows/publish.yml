@@ -29,11 +29,18 @@ jobs:
           RELEASE_REF: ${{ inputs.release_ref }}
         run: |
           node --input-type=module <<'NODE'
+          import { execSync } from 'node:child_process';
           import { readFileSync } from 'node:fs';
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
           if (process.env.RELEASE_REF !== `v${pkg.version}`) throw new Error('Tag must match package version');
           if (!pkg.repository) throw new Error('Set the public repository metadata before publishing');
+          const [major, minor] = execSync('npm -v').toString().trim().split('.').map(Number);
+          if (major < 11 || (major === 11 && minor < 15)) throw new Error('npm stage requires npm 11.15.0 or newer');
           NODE
       - run: npm ci
       - run: npm run check
-      - run: npm publish --ignore-scripts --access public --provenance
+      # The trusted publisher is stage-only: the release waits in npm's stage queue
+      # until a maintainer approves it with 2FA (npmjs.com → Staged Packages, or
+      # `npm stage list` + `npm stage approve <stage-id>`).
+      - name: Stage release
+        run: npm stage publish --ignore-scripts --access public --provenance
