@@ -15,12 +15,12 @@ try {
   writeFileSync(join(consumer, 'smoke.mjs'), `
     import assert from 'node:assert/strict';
     import { createRequire } from 'node:module';
-    import { createClient } from '@upax/athar';
-    import { createBrowserClient } from '@upax/athar/browser';
-    import { installAthar } from '@upax/athar/astro';
+    import { createClient } from '@upax-ai/athar';
+    import { createBrowserClient } from '@upax-ai/athar/browser';
+    import { installAthar } from '@upax-ai/athar/astro';
     const require = createRequire(import.meta.url);
     for (const peer of ${JSON.stringify(Object.keys(manifest.peerDependencies))}) assert.throws(() => require.resolve(peer));
-    assert.equal(typeof require('@upax/athar').createClient, 'function');
+    assert.equal(typeof require('@upax-ai/athar').createClient, 'function');
     const payloads = [];
     const client = createClient({ site: 'public-site-token', host: 'https://collector.example', flushInterval: 0,
       fetch: async (_url, init) => { payloads.push(JSON.parse(init.body)); return new Response(null, { status: 204 }); }
@@ -42,15 +42,15 @@ try {
     symlinkSync(join(root, 'node_modules', name), target, 'junction');
   }
   const source = `
-    import { createClient, type Properties } from '@upax/athar';
-    import { createBrowserClient } from '@upax/athar/browser';
-    import { AtharProvider } from '@upax/athar/react';
-    import { createAtharPlugin } from '@upax/athar/vue';
-    import { provideAthar as angular } from '@upax/athar/angular';
-    import { provideAthar as svelte } from '@upax/athar/svelte';
-    import { provideAthar as sveltekit } from '@upax/athar/sveltekit';
-    import { createNextClient, AtharNextProvider } from '@upax/athar/next';
-    import { installAthar } from '@upax/athar/astro';
+    import { createClient, type Properties } from '@upax-ai/athar';
+    import { createBrowserClient } from '@upax-ai/athar/browser';
+    import { AtharProvider } from '@upax-ai/athar/react';
+    import { createAtharPlugin } from '@upax-ai/athar/vue';
+    import { provideAthar as angular } from '@upax-ai/athar/angular';
+    import { provideAthar as svelte } from '@upax-ai/athar/svelte';
+    import { provideAthar as sveltekit } from '@upax-ai/athar/sveltekit';
+    import { createNextClient, AtharNextProvider } from '@upax-ai/athar/next';
+    import { installAthar } from '@upax-ai/athar/astro';
     const options = { site: 'public-site-token', host: 'https://collector.example' };
     const props: Properties = { amount: 1 };
     createClient(options).track('typed', props);

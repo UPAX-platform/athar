@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
-import type { BrowserClient } from '@upax/athar/browser';
+import type { BrowserClient } from '@upax-ai/athar/browser';
 
 const AtharContext = createContext<BrowserClient | null>(null);
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { useAthar } from '@upax/athar/sveltekit';
+  import { useAthar } from '@upax-ai/athar/sveltekit';
   const analytics = useAthar();
 </script>
 
