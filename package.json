@@ -1,6 +1,6 @@
 {
   "name": "@upax-ai/athar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Privacy-conscious analytics SDK for browsers, Node.js, and popular frontend frameworks",
   "license": "MIT",
   "type": "module",
