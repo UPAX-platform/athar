@@ -37,7 +37,8 @@ async function drive(browser, base, from, link, to) {
   await page.waitForFunction(() => window.athar);
   // The arrival's metadata can stream in after load; let it land so the navigation starts from a settled page.
   await page.waitForFunction(() => document.querySelector('meta[name="folio:doc"]'), null, { timeout: 8000 });
-  await page.waitForTimeout(300);
+  // Long enough for the links' prefetches, whose shell can make the navigation commit at once.
+  await page.waitForTimeout(1000);
   await flush();
   await page.evaluate(() => { window.softNavigation = true; });
   await page.click(link);
@@ -72,7 +73,7 @@ const scenarios = {
     execFileSync(process.execPath, [bin('next/dist/bin/next'), 'build'], { cwd: fixture('next-nav'), env, stdio: 'pipe' });
     const server = await serve([bin('next/dist/bin/next'), 'start', '-p', '4411'], fixture('next-nav'), 4411);
     try {
-      for (const route of ['constant', 'static', 'dynamic', 'body', 'streamed', 'streamed-prefetch', 'streamed-loading']) {
+      for (const route of ['constant', 'static', 'dynamic', 'body', 'streamed', 'streamed-prefetch', 'streamed-loading', 'auto-loading']) {
         const result = await drive(browser, 'http://localhost:4411', `/${route}/a`, `#${route}-b`, `/${route}/b`);
         verdict('next', route, result, `/${route}/b`, doc('b'));
       }

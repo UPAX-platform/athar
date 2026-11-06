@@ -21,3 +21,7 @@ jobs:
       - run: npm run check
       - run: npm run test:sveltekit
         if: matrix.node == 24
+      - run: npx playwright install --with-deps chromium
+        if: matrix.node == 24
+      - run: npm run test:navigation
+        if: matrix.node == 24

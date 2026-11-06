@@ -32,7 +32,7 @@ function collector() {
   const options = { site: `nav-${++site}`, host: 'https://collector.example', fetch: fetcher, flushInterval: 0, beforeSend: folioContext() } satisfies BrowserOptions;
   const views = () => fetcher.mock.calls.flatMap(call => JSON.parse(call[1].body).events as AnalyticsEvent[])
     .filter(event => event.name === 'page_view').map(event => [new URL(event.url!).pathname, event.props.doc]);
-  return { options, views };
+  return { options, fetcher, views };
 }
 
 beforeEach(() => { document.title = 'Site'; });
@@ -82,22 +82,30 @@ describe('Vue with vue-router (real framework and router, jsdom)', () => {
 describe('Angular with @angular/router (real framework and router, jsdom)', () => {
   const Root = Component({ selector: 'athar-root', imports: [RouterOutlet], template: '<router-outlet />' })(class {} as never) as unknown as new () => unknown;
   let pages = 0;
-  async function run(page: (doc: string) => new () => unknown) {
-    history.replaceState({}, '', '/a');
+  async function boot(page: (doc: string) => new () => unknown) {
     const { options, views } = collector();
     document.body.innerHTML = '<athar-root></athar-root>';
     const app = await bootstrapApplication(Root as never, { providers: [
       provideRouter([{ path: 'a', component: page(docA) as never }, { path: 'b', component: page(docB) as never }]),
       provideAngularAthar(options),
     ] });
+    // No manual tick: a view has to be reached by Angular's own scheduling.
     const settle = async () => { await app.injector.get(ApplicationRef).whenStable(); await new Promise(resolve => setTimeout(resolve, 50)); };
     await settle();
+    const finish = async () => {
+      const client = app.injector.get(ATHAR);
+      await client.flush();
+      app.destroy();
+      await client.shutdown();
+    };
+    return { app, settle, finish, views };
+  }
+  async function run(page: (doc: string) => new () => unknown) {
+    history.replaceState({}, '', '/a');
+    const { app, settle, finish, views } = await boot(page);
     await app.injector.get(Router).navigateByUrl('/b');
     await settle();
-    const client = app.injector.get(ATHAR);
-    await client.flush();
-    app.destroy();
-    await client.shutdown();
+    await finish();
     return views();
   }
   const component = (body: object) => Component({ selector: `athar-page-${++pages}`, template: '<p>page</p>' })(body as never) as unknown as new () => unknown;
@@ -115,6 +123,36 @@ describe('Angular with @angular/router (real framework and router, jsdom)', () =
       ngOnInit() { this.meta.updateTag({ name: 'folio:doc', content: doc }); }
     });
     expect(await run(page)).toEqual([['/a', docA], ['/b', docB]]);
+  });
+});
+
+describe('Angular query-only navigation (real framework and router, jsdom)', () => {
+  it('still fires when the same routed component stays and nothing needs rendering', async () => {
+    history.replaceState({}, '', '/b?tab=one');
+    const { options, fetcher } = collector();
+    let created = 0;
+    const Root = Component({ selector: 'athar-query-root', imports: [RouterOutlet], template: '<router-outlet />' })(class {} as never) as unknown as new () => unknown;
+    const Page = Component({ selector: 'athar-query-page', template: '<p>page</p>' })(class {
+      constructor() { created++; inject(Meta).updateTag({ name: 'folio:doc', content: docB }); }
+    } as never);
+    document.body.innerHTML = '<athar-query-root></athar-query-root>';
+    const app = await bootstrapApplication(Root as never, { providers: [
+      provideRouter([{ path: 'b', component: Page as never }]),
+      provideAngularAthar({ ...options, includeQuery: true }),
+    ] });
+    // No manual tick: the view has to be reached by Angular's own scheduling.
+    const settle = async () => { await app.injector.get(ApplicationRef).whenStable(); await new Promise(resolve => setTimeout(resolve, 50)); };
+    await settle();
+    await app.injector.get(Router).navigateByUrl('/b?tab=two');
+    await settle();
+    const client = app.injector.get(ATHAR);
+    await client.flush();
+    const views = fetcher.mock.calls.flatMap(call => JSON.parse(call[1].body).events as AnalyticsEvent[])
+      .filter(event => event.name === 'page_view').map(event => [new URL(event.url!).search, event.props.doc]);
+    expect(created).toBe(1);
+    expect(views).toEqual([['?tab=one', docB], ['?tab=two', docB]]);
+    app.destroy();
+    await client.shutdown();
   });
 });
 

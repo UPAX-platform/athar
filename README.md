@@ -561,7 +561,7 @@ deployment defaults. Tests use fake transports and an ephemeral local HTTP serve
 the compiled SDK, validating its virtual navigation import. CI runs it on Node.js 24.
 `npm run test:navigation` builds real Next.js, SvelteKit, and Astro fixtures against the
 compiled SDK (run `npm run build` first) and checks in Chromium which document each
-pageview credits. It needs `npx playwright install chromium` and is not part of CI.
+pageview credits. It needs `npx playwright install chromium`. CI runs it on Node.js 24.
 
 Before the first release, confirm the package scope/name and MIT license, add
 the public source URL as `repository` in `package.json`, and configure your npm
