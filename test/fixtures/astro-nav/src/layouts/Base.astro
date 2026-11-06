@@ -8,6 +8,7 @@ const { letter } = Astro.props;
     <title>Document {letter}</title>
     <meta name="folio:doc" content={`d_${letter.repeat(24)}`} />
     <meta name="folio:locale" content="en-US" />
+    <meta name="folio:path" content={Astro.url.pathname} />
     <ClientRouter />
     <script>
       import { installAthar } from '@upax-ai/athar/astro';

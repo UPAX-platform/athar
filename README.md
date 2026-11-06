@@ -270,8 +270,10 @@ flushes pending events; also use `client.shutdown()` when permanently retiring i
 ## Folio documents
 
 `@upax-ai/athar/folio` credits events to the Folio document on the page. Folio pages
-carry `<meta name="folio:doc">` and `<meta name="folio:locale">`. The entry adds no
-runtime dependency and works with any client from this package.
+carry `<meta name="folio:doc">` and `<meta name="folio:locale">`, and may carry
+`<meta name="folio:path" content="/ar/billing/refunds">`: the page's public path, with
+no origin, query or fragment. The entry adds no runtime dependency and works with any
+client from this package.
 
 ### Tag every event: `folioContext()`
 
@@ -290,6 +292,17 @@ It adds `doc` and `locale` to every event, including `page_view` (which keeps it
 are read as each event is sent and never cached. A prop you set wins, including
 `data-athar-event-doc`. With no metas, or no `document` during SSR, the event passes
 through unchanged.
+
+`folio:path` lets stale metas lose the credit instead of crediting the wrong document.
+When it does not match the path of the event's URL (or of the page, if the event has no
+usable URL), `folioContext()` adds no `doc` or `locale` from the metas. The event still
+sends, and a prop you set still stands, so `page({ url })` is judged by its own URL. A
+trailing slash, a trailing `/index.html` and percent-encoding do not count as a
+difference, and case does. If a path has a malformed percent sequence, the two strings
+are compared as they are. Without `folio:path`, nothing is checked.
+
+A site behind a proxy that rewrites paths must publish the path readers see in the
+address bar, or leave `folio:path` out. Otherwise every event on it goes untagged.
 
 To keep your own `beforeSend`, call one from the other. A `null` from yours passes
 through, so the event is still dropped:
@@ -310,10 +323,11 @@ after the new page's metas are rendered.
 | Integration | Credits the new document? |
 | --- | --- |
 | Astro (`installAthar`), SvelteKit, Vue with `router`, Next.js App Router, Angular with Router | Yes, they fire after the framework's navigation completes. |
-| React (`AtharProvider`), Svelte (`/svelte`), Vue without `router`, plain browser client | **No**, not by default. They use History tracking, which fires inside `pushState`, before a framework renders. That view carries the previous document. |
+| React (`AtharProvider`), Svelte (`/svelte`), Vue without `router`, plain browser client | **No**, not by default. They use History tracking, which fires inside `pushState`, before a framework renders. With `folio:path`, that view goes out with no `doc`: it loses the credit. Without `folio:path`, it carries the previous document. |
 
-With a client-side router and none of the adapters in the first row, turn History
-tracking off and send the view yourself after rendering:
+With a client-side router and none of the adapters in the first row, `folio:path` alone
+only keeps the wrong credit out. To get the view credited, turn History tracking off and
+send it yourself after rendering:
 
 ```ts
 const analytics = createBrowserClient({
@@ -353,7 +367,8 @@ delivery receipt and never means "stored": a failed flush still resolves `true`
 because the SDK keeps the event and retries, and the collector answers a silent 204
 even for an event it does not keep. It resolves `false` when nothing was queued: denied
 consent, Do Not Track, Global Privacy Control, a `beforeSend` that dropped it, a full
-queue, or a page without both metas. It never rejects. Don't thank the reader on `false`.
+queue, a page without both metas, or a `folio:path` that does not match the page. It
+never rejects. Don't thank the reader on `false`.
 
 ### Event contract
 

@@ -3,12 +3,41 @@ import type { AnalyticsClient, AnalyticsEvent } from './types';
 /** A reader's thumb on a document. */
 export type FolioReaction = 'up' | 'down';
 
-/** The page's document and locale, read now. Absent in SSR, without the metas, or when a meta is empty. */
-function metas(): { doc?: string; locale?: string } {
+/** A path's segments, decoded, without what a server treats as the same page. Throws on a malformed escape. */
+function segments(path: string): string[] {
+  const parts = path.split('/').map(decodeURIComponent);
+  const trim = () => { while (parts.at(-1) === '') parts.pop(); };
+  trim();
+  if (parts.at(-1) === 'index.html') parts.pop();
+  trim();
+  return parts;
+}
+
+function samePath(a: string, b: string): boolean {
+  try { return JSON.stringify(segments(a)) === JSON.stringify(segments(b)); }
+  catch { return a === b; }
+}
+
+/** The event's path when its URL is set and parseable, otherwise the page's. */
+function pathOf(url: string | undefined): string {
+  if (url) {
+    try { return new URL(url, location.href).pathname; } catch { /* Judged by the page instead. */ }
+  }
+  return location.pathname;
+}
+
+/**
+ * The page's document and locale, read now. Absent in SSR, without the metas, when a meta is empty,
+ * or when `folio:path` says the metas belong to a different path than `url`.
+ */
+function metas(url?: string): { doc?: string; locale?: string } {
   const found: { doc?: string; locale?: string } = {};
   if (typeof document === 'undefined') return found;
+  const read = (name: string) => document.querySelector(`meta[name="folio:${name}"]`)?.getAttribute('content')?.trim();
+  const path = read('path');
+  if (path && !samePath(path, pathOf(url))) return found;
   for (const name of ['doc', 'locale'] as const) {
-    const content = document.querySelector(`meta[name="folio:${name}"]`)?.getAttribute('content')?.trim();
+    const content = read(name);
     if (content) found[name] = content;
   }
   return found;
@@ -21,13 +50,18 @@ function metas(): { doc?: string; locale?: string } {
  * the new page's metas are rendered. A prop the caller set wins. Without the metas, or without
  * `document`, the event passes through unchanged.
  *
+ * When the page also has `<meta name="folio:path">` and it does not match the path of the event's
+ * URL, the metas are stale and add nothing, so the event loses the credit instead of crediting
+ * another document. A trailing slash, a trailing `/index.html` and percent-encoding do not count as
+ * a difference; case does. Without `folio:path` no such check is possible.
+ *
  * To keep your own filter, compose them: `beforeSend: event => tag(yours(event))`. A null from
  * yours passes through, so the event is still dropped.
  */
 export function folioContext(): <E extends AnalyticsEvent | null>(event: E) => E {
   return <E extends AnalyticsEvent | null>(event: E): E => {
     if (event === null) return event;
-    const tags = metas();
+    const tags = metas(event?.url);
     if (!tags.doc && !tags.locale) return event;
     return { ...(event as AnalyticsEvent), props: { ...tags, ...event.props } } as E;
   };
@@ -44,7 +78,7 @@ export function folioContext(): <E extends AnalyticsEvent | null>(event: E) => E
  *
  * Resolves false when nothing was queued: consent is denied, Do Not Track or Global Privacy Control
  * applies, a `beforeSend` dropped it, the queue is full, or the page has no `folio:doc` and
- * `folio:locale` metas to credit. Never rejects. Do not thank the reader on false.
+ * `folio:locale` metas to credit, including when `folio:path` shows they are stale. Never rejects. Do not thank the reader on false.
  */
 export async function sendReaction(client: Pick<AnalyticsClient, 'track' | 'flush'>, value: FolioReaction): Promise<boolean> {
   const { doc, locale } = metas();

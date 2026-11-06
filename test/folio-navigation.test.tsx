@@ -26,6 +26,8 @@ import type { AnalyticsEvent } from '../src/types';
 const docA = 'd_aaaaaaaaaaaaaaaaaaaaaaaa';
 const docB = 'd_bbbbbbbbbbbbbbbbbbbbbbbb';
 
+const pathOf = (doc: string) => doc === docA ? '/a' : '/b';
+
 let site = 0;
 function collector() {
   const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
@@ -60,7 +62,7 @@ describe('Vue with vue-router (real framework and router, jsdom)', () => {
     await client.shutdown();
     return views();
   }
-  const metas = (doc: string) => [h('meta', { name: 'folio:doc', content: doc }), h('meta', { name: 'folio:locale', content: 'en-US' })];
+  const metas = (doc: string) => [h('meta', { name: 'folio:doc', content: doc }), h('meta', { name: 'folio:locale', content: 'en-US' }), h('meta', { name: 'folio:path', content: pathOf(doc) })];
 
   it('credits B when the page teleports its metas into the head', async () => {
     const page = (doc: string) => defineComponent({ setup: () => () => h(Teleport, { to: 'head' }, metas(doc)) });
@@ -70,8 +72,10 @@ describe('Vue with vue-router (real framework and router, jsdom)', () => {
   it('credits B when the page sets its meta in onMounted', async () => {
     const page = (doc: string) => defineComponent({ setup() {
       onMounted(() => {
-        const meta = document.querySelector<HTMLMetaElement>('meta[name="folio:doc"]') ?? document.head.appendChild(Object.assign(document.createElement('meta'), { name: 'folio:doc' }));
-        meta.content = doc;
+        for (const [name, content] of [['folio:doc', doc], ['folio:path', pathOf(doc)]] as const) {
+          const meta = document.querySelector<HTMLMetaElement>(`meta[name="${name}"]`) ?? document.head.appendChild(Object.assign(document.createElement('meta'), { name }));
+          meta.content = content;
+        }
       });
       return () => h('p');
     } });
@@ -112,7 +116,11 @@ describe('Angular with @angular/router (real framework and router, jsdom)', () =
 
   it('credits B when the page sets its meta in the constructor', async () => {
     const page = (doc: string) => component(class {
-      constructor() { inject(Meta).updateTag({ name: 'folio:doc', content: doc }); }
+      constructor() {
+        const meta = inject(Meta);
+        meta.updateTag({ name: 'folio:doc', content: doc });
+        meta.updateTag({ name: 'folio:path', content: pathOf(doc) });
+      }
     });
     expect(await run(page)).toEqual([['/a', docA], ['/b', docB]]);
   });
@@ -120,7 +128,10 @@ describe('Angular with @angular/router (real framework and router, jsdom)', () =
   it('credits B when the page sets its meta in ngOnInit', async () => {
     const page = (doc: string) => component(class implements OnInit {
       private meta = inject(Meta);
-      ngOnInit() { this.meta.updateTag({ name: 'folio:doc', content: doc }); }
+      ngOnInit() {
+        this.meta.updateTag({ name: 'folio:doc', content: doc });
+        this.meta.updateTag({ name: 'folio:path', content: pathOf(doc) });
+      }
     });
     expect(await run(page)).toEqual([['/a', docA], ['/b', docB]]);
   });
@@ -133,7 +144,12 @@ describe('Angular query-only navigation (real framework and router, jsdom)', () 
     let created = 0;
     const Root = Component({ selector: 'athar-query-root', imports: [RouterOutlet], template: '<router-outlet />' })(class {} as never) as unknown as new () => unknown;
     const Page = Component({ selector: 'athar-query-page', template: '<p>page</p>' })(class {
-      constructor() { created++; inject(Meta).updateTag({ name: 'folio:doc', content: docB }); }
+      constructor() {
+        created++;
+        const meta = inject(Meta);
+        meta.updateTag({ name: 'folio:doc', content: docB });
+        meta.updateTag({ name: 'folio:path', content: '/b' });
+      }
     } as never);
     document.body.innerHTML = '<athar-query-root></athar-query-root>';
     const app = await bootstrapApplication(Root as never, { providers: [
@@ -157,11 +173,14 @@ describe('Angular query-only navigation (real framework and router, jsdom)', () 
 });
 
 describe('React: AtharProvider has no navigation of its own (real React, simulated router)', () => {
-  function Page({ doc, client, after }: { doc: string; client: BrowserClient; after?: boolean }) {
+  function Page({ doc, client, after, withPath }: { doc: string; client: BrowserClient; after: boolean; withPath: boolean }) {
     useEffect(() => { if (after) client.page(); }, [client, doc, after]);
-    return <><meta name="folio:doc" content={doc} /><meta name="folio:locale" content="en-US" /></>;
+    return <>
+      <meta name="folio:doc" content={doc} /><meta name="folio:locale" content="en-US" />
+      {withPath && <meta name="folio:path" content={pathOf(doc)} />}
+    </>;
   }
-  async function run(browser: Partial<BrowserOptions>, after: boolean) {
+  async function run(browser: Partial<BrowserOptions>, after: boolean, withPath: boolean) {
     (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
     history.replaceState({}, '', '/a');
     const { options, views } = collector();
@@ -170,7 +189,7 @@ describe('React: AtharProvider has no navigation of its own (real React, simulat
     function App() {
       const [doc, setDoc] = useState(docA);
       go = setDoc;
-      return <AtharProvider client={client}><Page doc={doc} client={client} after={after} /></AtharProvider>;
+      return <AtharProvider client={client}><Page doc={doc} client={client} after={after} withPath={withPath} /></AtharProvider>;
     }
     const host = document.createElement('div');
     const root = createRoot(host);
@@ -182,22 +201,26 @@ describe('React: AtharProvider has no navigation of its own (real React, simulat
     return views();
   }
 
-  it('mis-tags with its default, plain history tracking: B is credited to A', async () => {
-    expect(await run({}, false)).toEqual([['/a', docA], ['/b', docA]]);
+  it('under default history tracking with folio:path, sends B with no doc, never document A', async () => {
+    expect(await run({}, false, true)).toEqual([['/a', docA], ['/b', undefined]]);
   });
 
-  it('credits B with the supported route: historyTracking false and page() in an effect', async () => {
-    expect(await run({ historyTracking: false, initialPageview: false }, true)).toEqual([['/a', docA], ['/b', docB]]);
+  it('under default history tracking without folio:path, still credits B to A', async () => {
+    expect(await run({}, false, false)).toEqual([['/a', docA], ['/b', docA]]);
+  });
+
+  it.each([[true], [false]])('credits B with the supported route: historyTracking false and page() in an effect (folio:path %s)', async withPath => {
+    expect(await run({ historyTracking: false, initialPageview: false }, true, withPath)).toEqual([['/a', docA], ['/b', docB]]);
   });
 });
 
 describe('Svelte: provideAthar has no navigation of its own (real Svelte, simulated router)', () => {
-  async function run(browser: Partial<BrowserOptions>, after: boolean) {
+  async function run(browser: Partial<BrowserOptions>, after: boolean, withPath: boolean) {
     history.replaceState({}, '', '/a');
     const { options, views } = collector();
     let client!: BrowserClient; let go!: (doc: string) => void;
     const target = document.createElement('div'); document.body.append(target);
-    const app = mount(SvelteFolioDocument, { target, props: { options: { ...options, ...browser }, ready: (value: BrowserClient, navigate: (doc: string) => void) => { client = value; go = navigate; } } });
+    const app = mount(SvelteFolioDocument, { target, props: { options: { ...options, ...browser }, withPath, ready: (value: BrowserClient, navigate: (doc: string) => void) => { client = value; go = navigate; } } });
     flushSync();
     history.pushState({}, '', '/b');
     go(docB);
@@ -209,11 +232,15 @@ describe('Svelte: provideAthar has no navigation of its own (real Svelte, simula
     return views();
   }
 
-  it('mis-tags with its default, plain history tracking: B is credited to A', async () => {
-    expect(await run({}, false)).toEqual([['/a', docA], ['/b', docA]]);
+  it('under default history tracking with folio:path, sends B with no doc, never document A', async () => {
+    expect(await run({}, false, true)).toEqual([['/a', docA], ['/b', undefined]]);
   });
 
-  it('credits B with the supported route: historyTracking false and page() after tick()', async () => {
-    expect(await run({ historyTracking: false }, true)).toEqual([['/a', docA], ['/b', docB]]);
+  it('under default history tracking without folio:path, still credits B to A', async () => {
+    expect(await run({}, false, false)).toEqual([['/a', docA], ['/b', docA]]);
+  });
+
+  it.each([[true], [false]])('credits B with the supported route: historyTracking false and page() after tick() (folio:path %s)', async withPath => {
+    expect(await run({ historyTracking: false }, true, withPath)).toEqual([['/a', docA], ['/b', docB]]);
   });
 });

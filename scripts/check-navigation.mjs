@@ -47,6 +47,8 @@ async function drive(browser, base, from, link, to) {
   await page.waitForTimeout(2500);
   await flush();
   if (!await page.evaluate(() => window.softNavigation)) throw new Error(`${link} reloaded the page instead of navigating client-side`);
+  const path = await page.evaluate(() => document.querySelector('meta[name="folio:path"]')?.content);
+  if (!path?.replace(/\/$/, '').endsWith(to)) throw new Error(`${to} rendered folio:path ${path}`);
   const rendered = await page.evaluate(() => [...document.querySelectorAll('meta[name="folio:doc"]')].map(meta => meta.content));
   await page.close();
   return { views, rendered };

@@ -7,9 +7,9 @@ import type { AnalyticsEvent } from '../src/types';
 const docA = 'd_aaaaaaaaaaaaaaaaaaaaaaaa';
 const docB = 'd_bbbbbbbbbbbbbbbbbbbbbbbb';
 
-function setMetas(doc?: string, locale?: string) {
+function setMetas(doc?: string, locale?: string, path?: string) {
   document.head.querySelectorAll('meta[name^="folio:"]').forEach(meta => meta.remove());
-  for (const [name, content] of [['folio:doc', doc], ['folio:locale', locale]] as const) {
+  for (const [name, content] of [['folio:doc', doc], ['folio:locale', locale], ['folio:path', path]] as const) {
     if (content === undefined) continue;
     const meta = document.createElement('meta');
     meta.name = name; meta.content = content;
@@ -130,6 +130,114 @@ describe('folioContext', () => {
   });
 });
 
+describe('folio:path', () => {
+  const at = (path: string) => history.replaceState({}, '', path);
+  const tagged = (props: AnalyticsEvent['props'] = {}, url?: string) => folioContext()({ ...event(props), url }).props;
+  const arabic = '/ar/\u0627\u0644\u0641\u0648\u0627\u062a\u064a\u0631';
+
+  it('tags on a match, and adds nothing on a mismatch or leaves things as they were when absent', () => {
+    at('/a');
+    setMetas(docA, 'en-US', '/a');
+    expect(tagged()).toEqual({ doc: docA, locale: 'en-US' });
+    setMetas(docA, 'en-US', '/b');
+    expect(tagged()).toEqual({});
+    setMetas(docA, 'en-US');
+    expect(tagged()).toEqual({ doc: docA, locale: 'en-US' });
+    setMetas(docA, 'en-US', '  ');
+    expect(tagged()).toEqual({ doc: docA, locale: 'en-US' });
+  });
+
+  it.each([
+    ['root', '/', '/'],
+    ['/index.html at the root', '/index.html', '/'],
+    ['root and /index.html, the other way', '/', '/index.html'],
+    ['a trailing slash on the meta', '/a/b/', '/a/b'],
+    ['a trailing slash on the URL', '/a/b', '/a/b/'],
+    ['a trailing /index.html on the meta', '/a/b/index.html', '/a/b'],
+    ['a trailing /index.html on the URL', '/a/b', '/a/b/index.html'],
+    ['/index.html against a trailing slash', '/a/b/index.html', '/a/b/'],
+    ['an Arabic path, raw on the meta', arabic, encodeURI(arabic)],
+    ['an Arabic path, encoded on the meta', encodeURI(arabic), arabic],
+    ['an Arabic path with a trailing slash', `${arabic}/`, encodeURI(arabic)],
+    ['lowercase and uppercase hex', '/a%d8%a7', '/a%D8%A7'],
+  ])('matches %s', (_label, meta, url) => {
+    at(url);
+    setMetas(docA, 'en-US', meta);
+    expect(tagged()).toEqual({ doc: docA, locale: 'en-US' });
+  });
+
+  it.each([
+    ['case', '/Billing', '/billing'],
+    ['a different page', '/a/b', '/a/c'],
+    ['a parent path', '/a', '/a/b'],
+    ['an encoded slash against a real one', '/a%2Fb', '/a/b'],
+    ['an index page by another name', '/a/index.htm', '/a'],
+    ['a meta with an origin', 'https://example.com/a', '/a'],
+  ])('does not match %s', (_label, meta, url) => {
+    at(url);
+    setMetas(docA, 'en-US', meta);
+    expect(tagged()).toEqual({});
+  });
+
+  it('compares raw strings on a malformed escape, without throwing', () => {
+    at('/bad%ZZ');
+    setMetas(docA, 'en-US', '/bad%ZZ');
+    expect(tagged()).toEqual({ doc: docA, locale: 'en-US' });
+    setMetas(docA, 'en-US', '/bad%ZZ/');
+    expect(tagged()).toEqual({});
+    at('/good');
+    setMetas(docA, 'en-US', '/bad%E0%A4%A');
+    expect(tagged()).toEqual({});
+  });
+
+  it("judges an event by its own URL, ignoring query and fragment, and by the page's when that is unusable", () => {
+    at('/page');
+    setMetas(docA, 'en-US', '/own');
+    expect(tagged({}, 'https://example.com/own?x=1#y')).toEqual({ doc: docA, locale: 'en-US' });
+    expect(tagged({}, 'https://example.com/other')).toEqual({});
+    expect(tagged({}, 'https://[')).toEqual({});
+    at('/own');
+    expect(tagged({}, 'https://[')).toEqual({ doc: docA, locale: 'en-US' });
+  });
+
+  it('judges an explicit page({ url }) by that URL, end to end', async () => {
+    at('/somewhere-else');
+    setMetas(docA, 'en-US', '/own');
+    const { client, sent } = setup();
+    client.page({ url: 'https://example.com/own' });
+    client.page({ url: 'https://example.com/other' });
+    await client.flush();
+    expect(sent().map(item => item.props.doc)).toEqual([docA, undefined]);
+    await client.shutdown();
+  });
+
+  it('keeps a prop the caller set on a mismatch, and still sends the event', async () => {
+    at('/a');
+    setMetas(docA, 'en-US', '/b');
+    const { client, sent } = setup();
+    expect(client.track('kept', { doc: docB })).toBe(true);
+    expect(client.track('bare')).toBe(true);
+    await client.flush();
+    expect(sent()[0]!.props).toEqual({ doc: docB });
+    expect(sent()[1]!.props).toEqual({});
+    await client.shutdown();
+  });
+
+  it('sendReaction resolves false, unsent, on a mismatch and sends on a match', async () => {
+    at('/a');
+    setMetas(docA, 'en-US', '/b');
+    const stale = setup({ beforeSend: undefined });
+    await expect(sendReaction(stale.client, 'up')).resolves.toBe(false);
+    expect(stale.fetcher).not.toHaveBeenCalled();
+    await stale.client.shutdown();
+    setMetas(docA, 'en-US', '/a/');
+    const fresh = setup({ beforeSend: undefined });
+    await expect(sendReaction(fresh.client, 'up')).resolves.toBe(true);
+    expect(fresh.sent()[0]!.props).toEqual({ value: 'up', doc: docA, locale: 'en-US' });
+    await fresh.client.shutdown();
+  });
+});
+
 describe('sendReaction', () => {
   it('tracks folio_reaction with value, doc and locale without folioContext, then flushes', async () => {
     setMetas(docA, 'en-US');
@@ -203,6 +311,18 @@ describe('the single-page hazard', () => {
       ['http://localhost:3000/', docA],
       ['http://localhost:3000/b', docA], // The wrong document, which is the hazard.
     ]);
+    await client.shutdown();
+  });
+
+  it('with folio:path, plain history tracking sends the view with no doc, never the previous document', async () => {
+    history.replaceState({}, '', '/a');
+    setMetas(docA, 'en-US', '/a');
+    const { client, sent } = setup({ autoPageviews: true });
+    client.start();
+    history.pushState({}, '', '/b');
+    setMetas(docB, 'en-US', '/b');
+    await client.flush();
+    expect(sent().map(item => [new URL(item.url!).pathname, item.props.doc])).toEqual([['/a', docA], ['/b', undefined]]);
     await client.shutdown();
   });
 

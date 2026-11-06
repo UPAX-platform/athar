@@ -8,6 +8,7 @@ export default async function Page({ params }) {
     <title>{`Document ${doc}`}</title>
     <meta name="folio:doc" content={docOf(doc)} />
     <meta name="folio:locale" content="en-US" />
+    <meta name="folio:path" content={`/body/${doc}`} />
     <h1>body {doc}</h1>
   </>;
 }

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add the `@upax-ai/athar/folio` entry. `folioContext()` returns a `beforeSend` that adds `doc` and `locale` to every event from the page's `folio:doc` and `folio:locale` metas, read at send time. `sendReaction(client, 'up' | 'down')` tracks `folio_reaction`, flushes, and resolves whether the SDK accepted the event.
+- Pages may carry `<meta name="folio:path">`, the page's public path. When it does not match the event's URL path, the metas are stale: `folioContext()` adds no `doc` or `locale` from them and `sendReaction()` resolves false, unsent. Trailing slashes, a trailing `/index.html` and percent-encoding are normalized; case is not. Without the meta, nothing changes.
 - Next.js App Router: a pageview now waits up to 3 seconds for the route's metadata. Next 16 commits a navigation before its metadata lands, so views went out with an empty `title` and no metas, even for constant metadata.
 - The Next.js wait applies to every Next.js user of the SDK, not only Folio sites, and a page whose title stays empty waits the full 3 seconds before its pageview is sent.
 - Angular: a pageview now fires after the next render instead of in a microtask after `NavigationEnd`. Metas a routed component set in `ngOnInit` were credited to the previous page.
