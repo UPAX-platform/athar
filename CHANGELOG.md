@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-11-06
 
 - Add the `@upax-ai/athar/folio` entry. `folioContext()` returns a `beforeSend` that adds `doc` and `locale` to every event from the page's `folio:doc` and `folio:locale` metas, read at send time. `sendReaction(client, 'up' | 'down')` tracks `folio_reaction`, flushes, and resolves whether the SDK accepted the event.
 - Pages may carry `<meta name="folio:path">`, the page's public path. When it does not match the event's URL path, the metas are stale: `folioContext()` adds no `doc` or `locale` from them and `sendReaction()` resolves false, unsent. Trailing slashes, a trailing `/index.html` and percent-encoding are normalized; case is not. Without the meta, nothing changes.
