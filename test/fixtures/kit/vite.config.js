@@ -3,5 +3,8 @@ import { fileURLToPath } from 'node:url';
 
 export default {
   plugins: [sveltekit()],
-  resolve: { alias: { '@upax-ai/athar/sveltekit': fileURLToPath(new URL('../../../dist/sveltekit.js', import.meta.url)) } },
+  resolve: { alias: {
+    '@upax-ai/athar/sveltekit': fileURLToPath(new URL('../../../dist/sveltekit.js', import.meta.url)),
+    '@upax-ai/athar/folio': fileURLToPath(new URL('../../../dist/folio.js', import.meta.url)),
+  } },
 };

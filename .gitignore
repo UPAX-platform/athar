@@ -17,3 +17,8 @@ scripts/setup-demo.mjs
 scripts/serve-demo.mjs
 test/browser/
 playwright.config.ts
+
+# Navigation fixtures
+.next/
+next-env.d.ts
+.astro/

@@ -29,7 +29,7 @@ for (const file of pack.files) {
 }
 // Native Node imports need Angular's JIT compiler; application builds use Angular's AOT pipeline.
 await import('@angular/compiler');
-for (const suffix of ['', '/browser', '/react', '/vue', '/angular', '/svelte', '/next', '/astro']) {
+for (const suffix of ['', '/browser', '/react', '/vue', '/angular', '/svelte', '/next', '/astro', '/folio']) {
   const specifier = manifest.name + suffix;
   assert.ok(Object.keys(await import(specifier)).length, `Empty ESM export: ${specifier}`);
   assert.ok(Object.keys(require(specifier)).length, `Empty CommonJS export: ${specifier}`);

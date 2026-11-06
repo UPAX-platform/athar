@@ -267,6 +267,117 @@ It records the initial page and listens for `astro:page-load` after transitions.
 Use `analytics.client` for events and consent. `dispose()` removes listeners and
 flushes pending events; also use `client.shutdown()` when permanently retiring it.
 
+## Folio documents
+
+`@upax-ai/athar/folio` credits events to the Folio document on the page. Folio pages
+carry `<meta name="folio:doc">` and `<meta name="folio:locale">`. The entry adds no
+runtime dependency and works with any client from this package.
+
+### Tag every event: `folioContext()`
+
+```ts
+import { createBrowserClient } from '@upax-ai/athar/browser';
+import { folioContext } from '@upax-ai/athar/folio';
+
+const analytics = createBrowserClient({
+  site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io',
+  beforeSend: folioContext(),
+});
+```
+
+It adds `doc` and `locale` to every event, including `page_view` (which keeps its
+`title`) and `data-athar-event` clicks, so those need no per-element props. The metas
+are read as each event is sent and never cached. A prop you set wins, including
+`data-athar-event-doc`. With no metas, or no `document` during SSR, the event passes
+through unchanged.
+
+To keep your own `beforeSend`, call one from the other. A `null` from yours passes
+through, so the event is still dropped:
+
+```ts
+const tag = folioContext();
+const analytics = createBrowserClient({
+  site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io',
+  beforeSend: event => tag(redact(event)), // redact() may return null
+});
+```
+
+### Single-page navigation
+
+A `page_view` is credited to the metas on the page when it fires, so it must fire
+after the new page's metas are rendered.
+
+| Integration | Credits the new document? |
+| --- | --- |
+| Astro (`installAthar`), SvelteKit, Vue with `router`, Next.js App Router, Angular with Router | Yes, they fire after the framework's navigation completes. |
+| React (`AtharProvider`), Svelte (`/svelte`), Vue without `router`, plain browser client | **No**, not by default. They use History tracking, which fires inside `pushState`, before a framework renders. That view carries the previous document. |
+
+With a client-side router and none of the adapters in the first row, turn History
+tracking off and send the view yourself after rendering:
+
+```ts
+const analytics = createBrowserClient({
+  site: 'YOUR_PUBLIC_SITE_TOKEN', host: 'https://acme.upax.io',
+  historyTracking: false, beforeSend: folioContext(),
+});
+analytics.start();
+
+// In your router's after-render hook: an effect in React, `await tick()` in Svelte.
+analytics.page();
+```
+
+Use the same route, with `autoPageviews: false`, on any framework if your head manager
+writes metas after navigation completes, for example after its own delay or after
+fetching data in the page. Vue Router fires after the next tick, and Angular after the
+next render, so metas written later than that are missed.
+
+In the Next.js App Router, a view waits for the route's metadata, up to 3 seconds. It
+uses the title to tell that metadata is still pending, so declare the title through the
+Metadata API. With a `<title>` rendered by hand, a view can fire before streamed metas
+arrive and go out without `doc`. Leaving a route before its metadata lands sends no
+view for that route.
+
+### Reactions: `sendReaction()`
+
+```ts
+import { sendReaction } from '@upax-ai/athar/folio';
+
+const accepted = await sendReaction(analytics, 'up'); // or 'down'
+```
+
+This tracks `folio_reaction` with `value`, `doc` and `locale`, then flushes. It reads
+the metas itself, so it works without `folioContext()`.
+
+It resolves `true` when the SDK accepted the event into its send queue. That is not a
+delivery receipt and never means "stored": a failed flush still resolves `true`
+because the SDK keeps the event and retries, and the collector answers a silent 204
+even for an event it does not keep. It resolves `false` when nothing was queued: denied
+consent, Do Not Track, Global Privacy Control, a `beforeSend` that dropped it, a full
+queue, or a page without both metas. It never rejects. Don't thank the reader on `false`.
+
+### Event contract
+
+Any event with these props is counted per document:
+
+| Prop | Required | Limit |
+| --- | --- | --- |
+| `doc` | Yes | The public document id, matching `^[dl]_[a-z2-7]{24}(-[0-9]+)?$` |
+| `locale` | Yes | The document's locale, at most 35 characters |
+| `value` | No | One short breakdown value, at most 64 characters |
+| `amount` | No | A finite number up to 1e9 in magnitude. Beyond that the event counts and the amount is ignored. |
+
+Per-document event names must match `^[A-Za-z][A-Za-z0-9_.:-]{0,63}$`. An event
+outside these limits is kept as a raw event but not counted per document. Names starting
+with `_` are reserved, and `folio_` is reserved for platform components. `doc` and
+`locale` count toward the 2048-byte limit on an event's properties.
+
+### Consent
+
+Whether readers' browsers send these events is the site owner's decision. Folio adds no
+consent setting, and these helpers add none. If your site needs consent first, call
+`setConsent()` from your own consent flow, or don't load the SDK until you have it
+(see [Privacy and consent](#privacy-and-consent)).
+
 ## Node.js and other server runtimes
 
 ```ts
@@ -448,6 +559,9 @@ the manifest, README, changelog, and license. Builds contain no source maps or
 deployment defaults. Tests use fake transports and an ephemeral local HTTP server.
 `npm run test:sveltekit` also builds a real SvelteKit client/server fixture against
 the compiled SDK, validating its virtual navigation import. CI runs it on Node.js 24.
+`npm run test:navigation` builds real Next.js, SvelteKit, and Astro fixtures against the
+compiled SDK (run `npm run build` first) and checks in Chromium which document each
+pageview credits. It needs `npx playwright install chromium` and is not part of CI.
 
 Before the first release, confirm the package scope/name and MIT license, add
 the public source URL as `repository` in `package.json`, and configure your npm

@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { act, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AtharNextProvider, createNextClient } from '../src/next';
 import { useAthar } from '../src/react';
 
 const route = vi.hoisted(() => ({ pathname: '/' as string | null, search: '' }));
 vi.mock('next/navigation.js', () => ({ usePathname: () => route.pathname, useSearchParams: () => new URLSearchParams(route.search) }));
-afterEach(() => { history.replaceState({}, '', '/'); route.pathname = '/'; route.search = ''; });
+beforeEach(() => { document.title = 'Home'; });
+afterEach(() => { history.replaceState({}, '', '/'); route.pathname = '/'; route.search = ''; vi.useRealTimers(); });
 
 it('shares the React context, waits for route commits and deduplicates Strict Mode and query-only changes', async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,4 +51,41 @@ it('honors disabled pageviews and does not record a view before the router is re
   await client.flush(); expect(fetcher).toHaveBeenCalledTimes(1);
   await act(async () => { root.unmount(); });
   await disabled.shutdown(); await client.shutdown();
+});
+
+it('holds the pageview while streamed metadata is pending, and sends it with the tags once they land', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  const client = createNextClient({ site: 'next-pending', host: 'https://collector.example', fetch: fetcher, flushInterval: 0 });
+  const root = createRoot(document.createElement('div'));
+  document.title = '';
+  await act(async () => { root.render(<AtharNextProvider client={client} />); });
+  await client.flush(); expect(fetcher).not.toHaveBeenCalled();
+  document.title = 'Arrived';
+  await new Promise(resolve => setTimeout(resolve));
+  await client.flush();
+  expect(JSON.parse(fetcher.mock.calls[0]![1].body).events[0].props.title).toBe('Arrived');
+  await act(async () => { root.unmount(); }); await client.shutdown();
+});
+
+it('sends the pageview anyway when no title ever arrives, and not at all after leaving the route', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  const fetcher = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  const client = createNextClient({ site: 'next-untitled', host: 'https://collector.example', fetch: fetcher, flushInterval: 0 });
+  const root = createRoot(document.createElement('div'));
+  document.title = '';
+  await act(async () => { root.render(<AtharNextProvider client={client} />); });
+  vi.advanceTimersByTime(2999);
+  await client.flush(); expect(fetcher).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1);
+  await client.flush(); expect(fetcher).toHaveBeenCalledTimes(1);
+
+  fetcher.mockClear();
+  history.pushState({}, '', '/left'); route.pathname = '/left';
+  await act(async () => { root.render(<AtharNextProvider client={client} />); });
+  await act(async () => { root.unmount(); });
+  vi.advanceTimersByTime(3000);
+  await client.flush(); expect(fetcher).not.toHaveBeenCalled();
+  await client.shutdown();
 });

@@ -2,7 +2,7 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   entry: ['src/index.ts', 'src/browser.ts', 'src/react.tsx', 'src/vue.ts', 'src/angular.ts',
-    'src/svelte.ts', 'src/sveltekit.ts', 'src/next.tsx', 'src/astro.ts'],
+    'src/svelte.ts', 'src/sveltekit.ts', 'src/next.tsx', 'src/astro.ts', 'src/folio.ts'],
   format: ['esm', 'cjs'],
   platform: 'neutral',
   target: 'es2022',

@@ -51,6 +51,7 @@ try {
     import { provideAthar as sveltekit } from '@upax-ai/athar/sveltekit';
     import { createNextClient, AtharNextProvider } from '@upax-ai/athar/next';
     import { installAthar } from '@upax-ai/athar/astro';
+    import { folioContext, sendReaction } from '@upax-ai/athar/folio';
     const options = { site: 'public-site-token', host: 'https://collector.example' };
     const props: Properties = { amount: 1 };
     createClient(options).track('typed', props);
@@ -59,6 +60,9 @@ try {
     AtharProvider({ client: browser });
     createAtharPlugin(options); angular(options); svelte(options); sveltekit(options);
     AtharNextProvider({ client: createNextClient(options) }); installAthar(options);
+    const tag = folioContext();
+    createBrowserClient({ ...options, beforeSend: event => tag(event.name === 'drop' ? null : event) });
+    void sendReaction(browser, 'up');
   `;
   for (const extension of ['mts', 'cts']) writeFileSync(join(consumer, `consumer.${extension}`), source);
   execFileSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'),

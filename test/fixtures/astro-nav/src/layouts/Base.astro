@@ -1,0 +1,19 @@
+---
+import { ClientRouter } from 'astro:transitions';
+const { letter } = Astro.props;
+---
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Document {letter}</title>
+    <meta name="folio:doc" content={`d_${letter.repeat(24)}`} />
+    <meta name="folio:locale" content="en-US" />
+    <ClientRouter />
+    <script>
+      import { installAthar } from '@upax-ai/athar/astro';
+      import { folioContext } from '@upax-ai/athar/folio';
+      installAthar({ site: 'public-site-token', host: 'https://collector.example', flushInterval: 0, beforeSend: folioContext() });
+    </script>
+  </head>
+  <body><a id="doc-b" href="/b">Document b</a></body>
+</html>

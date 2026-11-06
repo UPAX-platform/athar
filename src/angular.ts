@@ -1,4 +1,4 @@
-import { DestroyRef, InjectionToken, PLATFORM_ID, inject, makeEnvironmentProviders, provideAppInitializer, type EnvironmentProviders } from '@angular/core';
+import { DestroyRef, EnvironmentInjector, InjectionToken, PLATFORM_ID, afterNextRender, inject, makeEnvironmentProviders, provideAppInitializer, type EnvironmentProviders } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { NavigationEnd, Router } from '@angular/router';
 import { stopAndFlush } from './adapter';
@@ -22,12 +22,14 @@ export function provideAthar(options: BrowserOptions): EnvironmentProviders {
         return;
       }
       let disposed = false;
-      // Router updates the document title after emitting NavigationEnd.
-      const navigate = () => queueMicrotask(() => {
+      const injector = inject(EnvironmentInjector);
+      // Router updates the document title after emitting NavigationEnd, and the routed component
+      // first initializes in the next render, so anything it puts in the head comes after both.
+      const navigate = () => afterNextRender(() => {
         if (disposed) return;
         client.start();
         if (options.autoPageviews !== false) client.pageIfChanged();
-      });
+      }, { injector });
       const subscription = router.events.subscribe(event => { if (event instanceof NavigationEnd) navigate(); });
       if (router.navigated) navigate();
       destroy.onDestroy(() => { disposed = true; subscription.unsubscribe(); stopAndFlush(client); });

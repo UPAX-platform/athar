@@ -39,6 +39,16 @@
         "default": "./dist/react.cjs"
       }
     },
+    "./folio": {
+      "import": {
+        "types": "./dist/folio.d.ts",
+        "default": "./dist/folio.js"
+      },
+      "require": {
+        "types": "./dist/folio.d.cts",
+        "default": "./dist/folio.cjs"
+      }
+    },
     "./package.json": "./package.json",
     "./vue": {
       "import": {
@@ -121,7 +131,8 @@
     "check": "npm run typecheck && npm test && npm run build && node scripts/check-package.mjs && node scripts/check-consumer.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm run check",
-    "test:sveltekit": "node scripts/check-sveltekit.mjs"
+    "test:sveltekit": "node scripts/check-sveltekit.mjs",
+    "test:navigation": "node scripts/check-navigation.mjs"
   },
   "peerDependencies": {
     "@angular/common": ">=19 <23",
@@ -170,6 +181,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "astro": "^7.4.7",
     "jsdom": "^26.0.0",
     "next": "^16.4.2",
     "react": "^19.0.0",
@@ -179,7 +191,8 @@
     "tsup": "^8.5.0",
     "typescript": "~6.0.3",
     "vitest": "^5.0.5",
-    "vue": "^3.5.44"
+    "vue": "^3.5.44",
+    "vue-router": "^5.4.0"
   },
   "repository": {
     "type": "git",

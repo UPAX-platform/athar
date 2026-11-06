@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add the `@upax-ai/athar/folio` entry. `folioContext()` returns a `beforeSend` that adds `doc` and `locale` to every event from the page's `folio:doc` and `folio:locale` metas, read at send time. `sendReaction(client, 'up' | 'down')` tracks `folio_reaction`, flushes, and resolves whether the SDK accepted the event.
+- Next.js App Router: a pageview now waits up to 3 seconds for the route's metadata. Next 16 commits a navigation before its metadata lands, so views went out with an empty `title` and no metas, even for constant metadata.
+- Angular: a pageview now fires after the next render instead of in a microtask after `NavigationEnd`. Metas a routed component set in `ngOnInit` were credited to the previous page.
+
 ## 0.1.1 — 2026-10-25
 
 - Releases are now staged (`npm stage publish`) by the Publish workflow and go live only after a maintainer approves them with 2FA. The README's release section documents the approval step.
